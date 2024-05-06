@@ -1,3 +1,7 @@
+mod ir;
+mod converter;
+use converter::Converter;
+use ir::SymbolMaker;
 use tree_sitter::{Parser, TreeCursor};
 
 fn print_tree(mut cursor: TreeCursor, depth: usize) {
@@ -20,8 +24,10 @@ fn print_tree(mut cursor: TreeCursor, depth: usize) {
 
 fn main() {
     let code = r#"
+    import java.util.Scanner;
     class Test {
-        int double(int x) {
+        int y;
+        int double(int x, int z) throws Exception {
             return x * 2;
         }
     }
@@ -31,8 +37,32 @@ fn main() {
     parser.set_language(&tree_sitter_java::language()).expect("Error loading Java grammar");
 
     let tree = parser.parse(code, None).unwrap();
-    let cursor = tree.root_node().walk();
+    println!("{}", tree.root_node().to_sexp());
+    // println!("Parse tree:");
+    // print_tree(tree.root_node().walk(), 0);
 
-    println!("Parse tree:");
-    print_tree(cursor, 0);
+    // let root = tree.root_node();
+    // let mut rcursor = root.walk();
+    // rcursor.goto_first_child();
+    // println!("{}", rcursor.node());
+    // // println!("{}", rcursor.get().unwrap());
+    // // println!("------------------");
+
+    // rcursor.goto_next_sibling();
+    // println!("{}", rcursor.node());
+    // rcursor.goto_parent();
+
+    // let child = root.named_child(0).unwrap();
+    // println!("{}", child.kind());
+    // let mut ccursor = child.walk();
+    // ccursor.goto_next_sibling();
+    // println!("{}", ccursor.node());
+
+
+    // println!("{}", child.child_by_field_name("name").unwrap());
+    // let nchild = child.next_named_sibling().unwrap();
+
+    // println!("HERE -----");
+    // println!("{}", nchild);
+    // println!("{}", nchild.child_by_field_name("name").unwrap());
 }

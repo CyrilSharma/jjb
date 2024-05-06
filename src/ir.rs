@@ -1,6 +1,6 @@
 use std::collections::LinkedList;
 
-enum Typ {
+pub enum Typ {
     Void,
     Bool,
     Char,
@@ -16,7 +16,7 @@ enum Typ {
     Class(Symbol)
 }
 
-enum Literal {
+pub enum Literal {
     Bool(bool),
     Char(char),
     Byte(u8),
@@ -25,31 +25,35 @@ enum Literal {
     Long(u64),
     Float(f32),
     Double(f64),
-    String(String),
-    Import(String)
+    String(String)
 }
 
-struct Symbol { id: u32 }
-struct SymbolMaker {
+#[derive(Copy, Clone)]
+pub struct Symbol { id: usize }
+pub struct SymbolMaker {
     count: u32,
     names: Vec<String>
 }
 impl SymbolMaker {
-    fn fresh(name: String) -> Symbol {
-        names.push(name);
-        Symbol { names.size() }
+    pub fn new() -> Self {
+        Self { count: 0, names: Vec::new() }
     }
 
-    fn name(sym: Symbol) -> String {
-        names[sym.id]
+    pub fn fresh(&mut self, name: String) -> Symbol {
+        self.names.push(name);
+        Symbol { id: self.names.len() }
     }
 
-    fn uname(sym: Symbol) -> String {
-        format!("{}{}", names[sym.id], sym.id)
+    pub fn name(&self, sym: Symbol) -> &str {
+        &self.names[sym.id as usize]
+    }
+
+    pub fn uname(&self, sym: Symbol) -> String {
+        format!("{}{}", self.names[sym.id], sym.id)
     }
 }
 
-enum Operation {
+pub enum Operation {
     // Arithmetic
     Add,
     Sub,
@@ -95,7 +99,10 @@ enum Operation {
 
     // Oddballs
     InstanceOf,
-    Ternary
+    Ternary,
+
+    // Custom
+    Phi
 }
 
 /*
@@ -105,11 +112,11 @@ enum Operation {
  * Easy to unroll (high-level structures are kept).
  * 
  * Continue, Break, and Import are all considered Primitives.
- * PHI is just another Operation.
  */
 
 type TreeRef = Box<Tree>;
-enum Tree {
+pub enum Tree {
+    LetI(ImportStatement),
     LetL(LitStatement),
     LetP(PrimStatement),
     LetF(FunDeclaration),
@@ -119,78 +126,95 @@ enum Tree {
     Loop(LoopStatement),
     AppF(AppFStatement),
     If(IfStatement),
-    Try(TryStatement)
+    Try(TryStatement),
+    Return(ReturnStatement),
+    EntryPoint(Symbol)
 }
 
-struct LitStatement {
-    name: Symbol,
-    val: Literal,
-    typ: Typ,
-    body: Option<TreeRef>
+pub struct ImportStatement {
+    pub path: String,
+    pub body: TreeRef
 }
 
-struct PrimStatement {
-    name: Symbol,
-    op: Operation,
-    args: Vector<Symbol>,
-    typ: Typ,
-    body: Option<TreeRef>
+pub struct LitStatement {
+    pub name: Symbol,
+    pub val: Literal,
+    pub typ: Typ,
+    pub body: TreeRef
 }
 
-struct FunDeclaration {
-    args: Vec<Symbol>,
-    types: Vec<Typ>,
-    throws: Vec<String>,
-    body: Option<TreeRef>
+pub struct PrimStatement {
+    pub name: Symbol,
+    pub op: Operation,
+    pub args: Vec<Symbol>,
+    pub typ: Typ,
+    pub body: TreeRef
 }
 
-struct ClassDeclaration {
-    members: Vec<Symbol>,
-    methods: LinkedList<TreeRef>,
-    body: Option<TreeRef>
+pub struct FunDeclaration {
+    pub name: Symbol,
+    pub args: Vec<(Symbol, Typ)>,
+    pub throws: Vec<String>,
+    pub return_typ: Typ,
+    pub body: Option<TreeRef>
 }
 
-struct EnumDeclaration {
-    members: Vec<Symbol>,
-    values: Vec<Literal>,
-    body: Option<TreeRef>
+pub struct ClassDeclaration {
+    pub name: Symbol,
+    pub members: Vec<(Symbol, Typ)>,
+    pub methods: LinkedList<TreeRef>,
+    pub extends: Vec<Symbol>,
+    pub body: TreeRef
 }
 
-struct SwitchStatement {
-    arg: Symbol,
-    cases: Vec<Literal>,
-    branches: Vec<TreeRef>,
-    body: Option<TreeRef>
+// We don't have support for more complicated enums, yet
+pub struct EnumDeclaration {
+    pub name: Symbol,
+    pub members: Vec<Symbol>,
+    pub values: Option<Vec<Literal>>,
+    pub body: TreeRef
+}
+
+pub struct SwitchStatement {
+    pub arg: Symbol,
+    pub cases: Vec<Literal>,
+    pub branches: Vec<TreeRef>,
+    pub default: TreeRef,
+    pub body: TreeRef
 }
 
 // All other loops will be translated into this.
-struct LoopStatement {
-    cond: Operation,
-    args: Vec<Symbol>,
-    lbody: Option<TreeRef>,
-    body: Option<TreeRef>
+pub struct LoopStatement {
+    pub cond: Operation,
+    pub args: Vec<Symbol>,
+    pub lbody: Option<TreeRef>,
+    pub body: TreeRef
 }
 
 // Functions expect to only receive symbols.
-struct AppFStatement {
-    fname: Symbol,
-    args: Vec<Symbol>,
-    body: Option<TreeRef>
+pub struct AppFStatement {
+    pub fname: Symbol,
+    pub args: Vec<Symbol>,
+    pub body: TreeRef
 }
 
-struct IfStatement {
-    cond: Operation,
-    args: Vec<Symbol>,
-    btrue: TreeRef,
-    bfalse: Option<TreeRef>,
-    body: Option<TreeRef>
+pub struct IfStatement {
+    pub cond: Operation,
+    pub args: Vec<Symbol>,
+    pub btrue: TreeRef,
+    pub bfalse: Option<TreeRef>,
+    pub body: TreeRef
 }
 
-struct TryStatement {
-    main: TreeRef,
+pub struct TryStatement {
+    pub main: TreeRef,
     // The class symbol and the arg symbol.
-    exceptions: Vec<(Symbol, Symbol)>,
-    catches: Vec<TreeRef>,
-    finally: TreeRef,
-    body: Option<TreeRef>
+    pub exceptions: Vec<(Symbol, Symbol)>,
+    pub catches: Vec<TreeRef>,
+    pub finally: TreeRef,
+    pub body: TreeRef
+}
+
+pub struct ReturnStatement {
+    pub val: Option<Symbol>
 }
