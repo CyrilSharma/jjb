@@ -1,3 +1,5 @@
+// https://github.com/tree-sitter/tree-sitter-java/blob/master/grammar.js
+// We parse a subset of the above grammar.
 use std::collections::LinkedList;
 
 use crate::ir::*;
@@ -16,35 +18,34 @@ impl<'l> Converter<'l> {
 
     pub fn convert(&mut self, root: Node) -> Tree {
         assert!(root.kind() == "program");
-        let fchild = root.named_child(0).expect("Program is empty!");
-        *self.top(fchild)
+        let mut cursor = root.walk();
+        if !cursor.goto_last_child() { panic!("Empty Program!") }
+        let mut tail = Box::new(Tree::EntryPoint(self.sm.fresh("Main".to_string())));
+        loop {
+            tail = self.top(cursor.node(), tail);
+            if !cursor.goto_previous_sibling() { break }
+        }
+        *tail
     }
 
-    pub fn top(&mut self, root: Node) -> Box<Tree> {
+    pub fn top(&mut self, root: Node, tail: Box<Tree>) -> Box<Tree> {
         match root.kind() {
-            "class_declaration" => self.class_declaration(root),
-            "import_declaration" => self.import_declaration(root),
+            "class_declaration" => self.class_declaration(root, tail),
+            "import_declaration" => self.import_declaration(root, tail),
             other => panic!("Parse Tree uses unknown node {}\n", other)
         }
     }
 
-    pub fn import_declaration(&mut self, node: Node) -> Box<Tree> {
+    pub fn import_declaration(&mut self, node: Node, tail: Box<Tree>) -> Box<Tree> {
         let path = node.named_child(0).expect("Invalid Import")
             .utf8_text(self.source).expect("UTF8 Error");
-        let body = if let Some(sibling) = node.next_named_sibling() {
-            self.top(sibling)
-        } else {
-            Box::new(Tree::EntryPoint(
-                self.entry_sym.expect("Main Method not found.")
-            ))
-        };
         return Box::new(Tree::LetI(ImportStatement {
             path: path.to_string(),
-            body
+            body: tail
         }));
     }
 
-    pub fn class_declaration(&mut self, node: Node) -> Box<Tree> {
+    pub fn class_declaration(&mut self, node: Node, tail: Box<Tree>) -> Box<Tree> {
         let mut members = Vec::new();
         let mut methods = LinkedList::new();
         if let Some(body) = node.child_by_field_name("body") {
@@ -59,19 +60,12 @@ impl<'l> Converter<'l> {
         }
         
         let cname = self.get_field_text(&node, "name");
-        let body = if let Some(sibling) = node.next_named_sibling() {
-            self.top(sibling)
-        } else {
-            Box::new(Tree::EntryPoint(
-                self.entry_sym.expect("Main Method not found.")
-            ))
-        };
         return Box::new(Tree::LetC(ClassDeclaration {
             name: self.sm.fresh(cname),
             members,
             methods,
             extends: todo!(),
-            body
+            body: tail
         }));
     }
 
@@ -115,8 +109,53 @@ impl<'l> Converter<'l> {
     }
 
     pub fn body(&mut self, node: Node) -> Box<Tree> {
-        todo!();
+        match node.kind() {
+            "block" => self.block(node),
+            other => panic!("Unknown body child: {}", other)
+        }
     }
+
+    pub fn block(&mut self, block: Node) -> Box<Tree> {
+        let mut cursor = block.walk();
+        // In some situations this may be ok, but this is just a quick fix.
+        if !cursor.goto_last_child() { panic!("Empty Block!") }
+        // If the function is non-void, then this is redundant, DCE will remove it.
+        // Otherwise, it is implicit in a void function, and must be added explicitly.
+        let mut tail = Box::new(Tree::Return(ReturnStatement{ val: None }));
+        loop {
+            tail = self.statement(cursor.node(), tail);
+            if !cursor.goto_previous_sibling() { break }
+        }
+        tail
+    }
+
+    pub fn statement(&mut self, node: Node, tail: Box<Tree>) -> Box<Tree> {
+        match node.kind() {
+            "declaration" => todo!(),
+            "expression_statement" => todo!(),
+            "labeled_statement" => todo!(),
+            "if_statement" => todo!(),
+            "while_statement" => todo!(),
+            "for_statement" => todo!(),
+            "enhanced_for_statement" => todo!(),
+            "block" => todo!(),
+            ";" => tail,
+            "assert_statement" => todo!(),
+            "do_statement" => todo!(),
+            "break_statement" => todo!(),
+            "continue_statement" => todo!(),
+            "return_statement" => todo!(),
+            "yield_statement" => todo!(),
+            "switch_expression" => todo!(),
+            "synchronized_statement" => todo!(),
+            "local_variable_declaration" => todo!(),
+            "throw_statement" => todo!(),
+            "try_statement" => todo!(),
+            "try_with_resources_statement" => todo!(), 
+            _ => panic!("Unsupported statement!")
+        }
+    }
+
 
     fn get_field_text(&mut self, node: &Node, field_name: &str) -> String {
         let child = node.child_by_field_name(field_name)
