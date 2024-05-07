@@ -205,7 +205,7 @@ impl<'l> Converter<'l> {
                 args: vec![self.expression(H::get_field(&node, "operand"))]
             })),
             "switch_expression" => todo!(),
-            _ => panic!("Unknown Expression Type!")
+            other => panic!("Unknown Expression Type: {}", other)
         }
     }
 
