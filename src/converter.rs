@@ -3,7 +3,8 @@
 use std::collections::LinkedList;
 
 use crate::ir::*;
-use tree_sitter::{Node, Parser, TreeCursor};
+use crate::tshelpers as H;
+use tree_sitter::Node;
 pub struct Converter<'l> {
     source: &'l [u8],
     sm: &'l mut SymbolMaker,
@@ -59,7 +60,7 @@ impl<'l> Converter<'l> {
             }
         }
         
-        let cname = self.get_field_text(&node, "name");
+        let cname = H::get_field_text(&node, "name", &self.source);
         return Box::new(Tree::LetC(ClassDeclaration {
             name: self.sm.fresh(cname),
             members,
@@ -70,40 +71,35 @@ impl<'l> Converter<'l> {
     }
 
     fn parse_field(&mut self, node: Node) -> (Symbol, Typ) {
-        let typ = Converter::convert_tstyp(&self.get_field_text(&node, "type"));
-        let declarator = node.child_by_field_name("declarator")
-            .expect("Field name does not have declarator!");
-        let name = self.get_field_text(&declarator, "name");
+        let typ = H::get_typ(&node, self.source);
+        let declarator = H::get_field(&node, "declarator");
+        let name = H::get_field_text(&declarator, "name", self.source);
         (self.sm.fresh(name), typ)
     }
 
     pub fn method_declaration(&mut self, node: Node) -> Box<Tree> {
-        let rtyp = Converter::convert_tstyp(&self.get_field_text(&node, "type"));
-        let name = self.get_field_text(&node, "name");
+        let rtyp = H::get_typ(&node, self.source);
+        let name = H::get_field_text(&node, "name", self.source);
         let name_sym = self.sm.fresh(name);
 
         let mut args = Vec::new();
         if let Some(params) = node.child_by_field_name("parameters") {
             let mut cursor = params.walk();
             for child in params.named_children(&mut cursor) {
-                let temp = self.get_field_text(&child, "name");
                 args.push((
-                    self.sm.fresh(temp),
-                    Converter::convert_tstyp(&self.get_field_text(&child, "type")),
+                    self.sm.fresh(H::get_field_text(&child, "name", self.source)),
+                    H::get_typ(&node, self.source),
                 ));
             }
         }
 
-        let mut body: Option<Box<Tree>> = None;
-        if let Some(child) = node.child_by_field_name("body") {
-            body = Some(self.body(child)); 
-        };
-
+        let mut body = node.child_by_field_name("body").map(|x| self.body(x));
         Box::new(Tree::LetF(FunDeclaration {
             name: name_sym,
             return_typ: rtyp,
             args,
             throws: todo!(),
+            modifiers: todo!(),
             body
         }))
     }
@@ -116,36 +112,61 @@ impl<'l> Converter<'l> {
     }
 
     pub fn block(&mut self, block: Node) -> Box<Tree> {
-        let mut cursor = block.walk();
-        // In some situations this may be ok, but this is just a quick fix.
-        if !cursor.goto_last_child() { panic!("Empty Block!") }
-        // If the function is non-void, then this is redundant, DCE will remove it.
-        // Otherwise, it is implicit in a void function, and must be added explicitly.
-        let mut tail = Box::new(Tree::Return(ReturnStatement{ val: None }));
-        loop {
-            tail = self.statement(cursor.node(), tail);
-            if !cursor.goto_previous_sibling() { break }
+        if let Some(child) = block.named_child(0) {
+            self.statement(child)
+        } else {
+            todo!()
         }
-        tail
     }
 
-    pub fn statement(&mut self, node: Node, tail: Box<Tree>) -> Box<Tree> {
+    pub fn statement(&mut self, node: Node) -> Box<Tree> {
         match node.kind() {
             "declaration" => todo!(),
             "expression_statement" => todo!(),
             "labeled_statement" => todo!(),
-            "if_statement" => todo!(),
-            "while_statement" => todo!(),
+            "if_statement" => Box::new(Tree::If(IfStatement {
+                cond: self.expression(H::get_field(&node, "condition")),
+                btrue: self.statement(H::get_field(&node, "consequence")),
+                bfalse: node.child_by_field_name("alternative").map(|child| self.statement(child)),
+                body: self.next(node)
+            })),
+            "while_statement" => Box::new(Tree::Loop(LoopStatement {
+                cond: self.expression(H::get_field(&node, "condition")),
+                lbody: Some(self.statement(H::get_field(&node, "body"))),
+                body: self.next(node)
+            })),
             "for_statement" => todo!(),
             "enhanced_for_statement" => todo!(),
             "block" => todo!(),
-            ";" => tail,
-            "assert_statement" => todo!(),
+            ";" => self.next(node),
+            "assert_statement" => Box::new(Tree::LetP(PrimStatement {
+                name: self.sm.fresh("assert".to_string()),
+                op: Operation::Assert,
+                args: vec![node.child(1), node.child(2)].into_iter().flatten()
+                    .map(|x| self.expression(x)).collect(),
+                typ: Typ::Void,
+                body: self.next(node)
+            })),
+            // requires special handling.
             "do_statement" => todo!(),
-            "break_statement" => todo!(),
-            "continue_statement" => todo!(),
-            "return_statement" => todo!(),
-            "yield_statement" => todo!(),
+            "break_statement" => Box::new(Tree::LetP(PrimStatement {
+                name: self.sm.fresh("break".to_string()),
+                op: Operation::Break,
+                args: Vec::new(),
+                typ: Typ::Void,
+                body: self.next(node)
+            })),
+            "continue_statement" => Box::new(Tree::LetP(PrimStatement {
+                name: self.sm.fresh("continue".to_string()),
+                op: Operation::Continue,
+                args: Vec::new(),
+                typ: Typ::Void,
+                body: self.next(node)
+            })),
+            "return_statement" => Box::new(Tree::Return(ReturnStatement { 
+                val: node.named_child(0).map(|child| self.expression(child))
+            })),
+            "yield_statement" => panic!("Yield is unsupported!"),
             "switch_expression" => todo!(),
             "synchronized_statement" => todo!(),
             "local_variable_declaration" => todo!(),
@@ -156,26 +177,83 @@ impl<'l> Converter<'l> {
         }
     }
 
-
-    fn get_field_text(&mut self, node: &Node, field_name: &str) -> String {
-        let child = node.child_by_field_name(field_name)
-            .unwrap_or_else(|| panic!("Field '{}' is missing", field_name));
-        child.utf8_text(self.source)
-            .unwrap_or_else(|_| panic!("Field '{}' contains invalid UTF-8", field_name))
-            .to_string()
+    pub fn next(&mut self, node: Node) -> Box<Tree> {
+        if let Some(sib) = node.next_named_sibling() {
+            self.statement(sib)
+        } else {
+            Box::new(Tree::Jump)
+        }
     }
 
-    pub fn convert_tstyp(name: &str) -> Typ {
-        match name {
-            "int" => Typ::Int,
-            other => panic!("Unknown Tree-Sitter Type: {}\n", other)
+    pub fn expression(&mut self, node: Node) -> Operand {
+        match node.kind() {
+            "assignment_expression" => self.binary_expression(node),
+            "binary_expression" => self.binary_expression(node),
+            "instanceof_expression" => todo!(),
+            "lambda_expression" => todo!(),
+            "ternary_expression" => Operand::T(Box::new(ExprTree {
+                op: Operation::Ternary,
+                args: vec![self.expression(H::get_field(&node, "condition")),
+                           self.expression(H::get_field(&node, "consequence")),
+                           self.expression(H::get_field(&node, "alternative"))]
+            })),
+            "update_expression" => todo!(),
+            "primary_expression" => todo!(),
+            "cast_expression" => todo!(),
+            "unary_expression" => Operand::T(Box::new(ExprTree {
+                op: H::get_op(&node, self.source),
+                args: vec![self.expression(H::get_field(&node, "operand"))]
+            })),
+            "switch_expression" => todo!(),
+            _ => panic!("Unknown Expression Type!")
         }
+    }
+
+    pub fn primary_expression(&mut self, node: Node) -> Operand {
+        if let Some(l) = H::parse_lit(&node, self.source) { return Operand::C(l) }
+        match node.kind() {
+            "class_literal" => todo!(),
+            "this" => todo!(),
+            "identifier" => Operand::V(self.lookup(&H::get_text(&node, self.source))),
+            "parenthesized_expression" => todo!(),
+            "object_creation_expression" => todo!(),
+            "field_access" => todo!(),
+            "array_access" => todo!(),
+            "method_invocation" => todo!(),
+            "method_reference" => todo!(),
+            "array_creation_expression" => todo!(),
+            "template_expression" => todo!(),
+            res if H::is_reserved_identifier(res) => panic!("Reserved Identifiers are not supported!"),
+            other => panic!("Unknown Primary Expression {}\n", other)
+        }
+    }
+
+    pub fn binary_expression(&mut self, node: Node) -> Operand {
+        Operand::T(Box::new(ExprTree {
+            op: H::get_op(&node, self.source),
+            args: vec![
+                self.expression(H::get_field(&node, "left")),
+                self.expression(H::get_field(&node, "right"))
+            ]
+        }))
+    }
+
+    pub fn switch_expression(&mut self, node: Node) -> Box<Tree> {
+        // Note that even if switches appear as expression, we can still turn them into
+        // Top-level statements, but pushing whatever expression tree they appear in, down into the branches.
+        todo!()
+    }
+
+    pub fn lookup(&mut self, name: &str) -> Symbol {
+        todo!()
     }
 }
 
 
 #[cfg(test)]
 mod tests {
+    use tree_sitter::Parser;
+
     use super::*;
 
     #[test]

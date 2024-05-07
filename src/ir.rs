@@ -17,6 +17,7 @@ pub enum Typ {
 }
 
 pub enum Literal {
+    Null,
     Bool(bool),
     Char(char),
     Byte(u8),
@@ -95,6 +96,7 @@ pub enum Operation {
     Shr,
     UShr,
     And,
+    Or,
     Xor,
 
     // Oddballs
@@ -102,7 +104,10 @@ pub enum Operation {
     Ternary,
 
     // Custom
-    Phi
+    Phi,
+    Continue,
+    Break,
+    Assert
 }
 
 /*
@@ -116,8 +121,8 @@ pub enum Operation {
 
 type TreeRef = Box<Tree>;
 pub enum Tree {
+    Jump,
     LetI(ImportStatement),
-    LetL(LitStatement),
     LetP(PrimStatement),
     LetF(FunDeclaration),
     LetC(ClassDeclaration),
@@ -136,17 +141,21 @@ pub struct ImportStatement {
     pub body: TreeRef
 }
 
-pub struct LitStatement {
-    pub name: Symbol,
-    pub val: Literal,
-    pub typ: Typ,
-    pub body: TreeRef
+pub enum Operand {
+    C(Literal),
+    V(Symbol),
+    T(Box<ExprTree>)
+}
+
+pub struct ExprTree {
+    pub op: Operation,
+    pub args: Vec<Operand>
 }
 
 pub struct PrimStatement {
     pub name: Symbol,
     pub op: Operation,
-    pub args: Vec<Symbol>,
+    pub args: Vec<Operand>,
     pub typ: Typ,
     pub body: TreeRef
 }
@@ -154,6 +163,7 @@ pub struct PrimStatement {
 pub struct FunDeclaration {
     pub name: Symbol,
     pub args: Vec<(Symbol, Typ)>,
+    pub modifiers: Vec<String>,
     pub throws: Vec<String>,
     pub return_typ: Typ,
     pub body: Option<TreeRef>
@@ -176,7 +186,7 @@ pub struct EnumDeclaration {
 }
 
 pub struct SwitchStatement {
-    pub arg: Symbol,
+    pub arg: Operand,
     pub cases: Vec<Literal>,
     pub branches: Vec<TreeRef>,
     pub default: TreeRef,
@@ -185,22 +195,19 @@ pub struct SwitchStatement {
 
 // All other loops will be translated into this.
 pub struct LoopStatement {
-    pub cond: Operation,
-    pub args: Vec<Symbol>,
+    pub cond: Operand,
     pub lbody: Option<TreeRef>,
     pub body: TreeRef
 }
 
-// Functions expect to only receive symbols.
 pub struct AppFStatement {
     pub fname: Symbol,
-    pub args: Vec<Symbol>,
+    pub args: Vec<Operand>,
     pub body: TreeRef
 }
 
 pub struct IfStatement {
-    pub cond: Operation,
-    pub args: Vec<Symbol>,
+    pub cond: Operand,
     pub btrue: TreeRef,
     pub bfalse: Option<TreeRef>,
     pub body: TreeRef
@@ -216,5 +223,5 @@ pub struct TryStatement {
 }
 
 pub struct ReturnStatement {
-    pub val: Option<Symbol>
+    pub val: Option<Operand>
 }

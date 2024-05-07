@@ -1,5 +1,6 @@
 mod ir;
 mod converter;
+mod tshelpers;
 use converter::Converter;
 use ir::SymbolMaker;
 use tree_sitter::{Parser, TreeCursor};
@@ -28,6 +29,11 @@ fn main() {
     class Test {
         int y;
         int double(int x, int z) throws Exception {
+            if (x == 2) {
+                return 1;
+            } else {
+                return 2;
+            }
             return x * 2;
         }
     }
