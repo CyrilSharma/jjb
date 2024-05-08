@@ -21,7 +21,7 @@ impl<'l> Converter<'l> {
         assert!(root.kind() == "program");
         let mut cursor = root.walk();
         if !cursor.goto_last_child() { panic!("Empty Program!") }
-        let mut tail = Box::new(Tree::EntryPoint(self.sm.fresh("Main".to_string())));
+        let mut tail = Box::new(Tree::EntryPoint(self.sm.fresh("Main")));
         loop {
             tail = self.top(cursor.node(), tail);
             if !cursor.goto_previous_sibling() { break }
@@ -93,7 +93,7 @@ impl<'l> Converter<'l> {
             }
         }
 
-        let mut body = node.child_by_field_name("body").map(|x| self.body(x));
+        let body = node.child_by_field_name("body").map(|x| self.body(x));
         Box::new(Tree::LetF(FunDeclaration {
             name: name_sym,
             return_typ: rtyp,
@@ -140,7 +140,7 @@ impl<'l> Converter<'l> {
             "block" => todo!(),
             ";" => self.next(node),
             "assert_statement" => Box::new(Tree::LetP(PrimStatement {
-                name: self.sm.fresh("assert".to_string()),
+                name: self.sm.fresh("assert"),
                 op: Operation::Assert,
                 args: vec![node.child(1), node.child(2)].into_iter().flatten()
                     .map(|x| self.expression(x)).collect(),
@@ -150,14 +150,14 @@ impl<'l> Converter<'l> {
             // requires special handling.
             "do_statement" => todo!(),
             "break_statement" => Box::new(Tree::LetP(PrimStatement {
-                name: self.sm.fresh("break".to_string()),
+                name: self.sm.fresh("break"),
                 op: Operation::Break,
                 args: Vec::new(),
                 typ: Typ::Void,
                 body: self.next(node)
             })),
             "continue_statement" => Box::new(Tree::LetP(PrimStatement {
-                name: self.sm.fresh("continue".to_string()),
+                name: self.sm.fresh("continue"),
                 op: Operation::Continue,
                 args: Vec::new(),
                 typ: Typ::Void,
@@ -186,6 +186,9 @@ impl<'l> Converter<'l> {
     }
 
     pub fn expression(&mut self, node: Node) -> Operand {
+        use Operand as O;
+        use Literal as L;
+        let source = self.source;
         match node.kind() {
             "assignment_expression" => self.binary_expression(node),
             "binary_expression" => self.binary_expression(node),
@@ -198,33 +201,53 @@ impl<'l> Converter<'l> {
                            self.expression(H::get_field(&node, "alternative"))]
             })),
             "update_expression" => todo!(),
-            "primary_expression" => todo!(),
             "cast_expression" => todo!(),
             "unary_expression" => Operand::T(Box::new(ExprTree {
-                op: H::get_op(&node, self.source),
+                op: H::get_op(&node, source),
                 args: vec![self.expression(H::get_field(&node, "operand"))]
             })),
             "switch_expression" => todo!(),
-            other => panic!("Unknown Expression Type: {}", other)
-        }
-    }
 
-    pub fn primary_expression(&mut self, node: Node) -> Operand {
-        if let Some(l) = H::parse_lit(&node, self.source) { return Operand::C(l) }
-        match node.kind() {
-            "class_literal" => todo!(),
+            //------- PRIMARY EXPRESSIONS ---------//
+
+            // _literal
+            "decimal_integer_literal" => O::C(L::Long(H::parse_text(&node, source))),
+            "hex_integer_literal" => O::C(L::Long(H::parse_text(&node, source))),
+            "octal_integer_literal" => O::C(L::Long(H::parse_text(&node, source))),
+            "binary_integer_literal" => O::C(L::Long(H::parse_text(&node, source))),
+            "decimal_floating_point_literal" => O::C(L::Double(H::parse_text(&node, source))),
+            "hex_floating_point_literal" => O::C(L::Long(H::parse_text(&node, source))),
+            "true" => O::C(L::Bool(true)),
+            "false" => O::C(L::Bool(false)),
+            "character_literal" => O::C(L::Char(H::parse_text(&node, source))),
+            "string_literal" => O::C(L::String(H::parse_text(&node, source))),
+            "null_literal" => O::C(L::Null),
+
+            "class_literal" => panic!("Class Literals are not supported!"),
             "this" => todo!(),
-            "identifier" => Operand::V(self.lookup(&H::get_text(&node, self.source))),
-            "parenthesized_expression" => todo!(),
+            
+            "identifier" => O::V(self.lookup(&H::get_text(&node, source))),
+
+            "parenthesized_expression" => self.expression(node.named_child(1).expect("parenthesized_expression")),
             "object_creation_expression" => todo!(),
-            "field_access" => todo!(),
-            "array_access" => todo!(),
+            "field_access" => O::T(Box::new(ExprTree {
+                op: Operation::Access,
+                args: vec![self.expression(H::get_field(&node, "object")),
+                           self.expression(H::get_field(&node, "field"))]
+            })),
+            "array_access" => O::T(Box::new(ExprTree {
+                op: Operation::Index,
+                args: vec![self.expression(H::get_field(&node, "array")),
+                           self.expression(H::get_field(&node, "index"))]
+            })),
             "method_invocation" => todo!(),
             "method_reference" => todo!(),
             "array_creation_expression" => todo!(),
             "template_expression" => todo!(),
-            res if H::is_reserved_identifier(res) => panic!("Reserved Identifiers are not supported!"),
-            other => panic!("Unknown Primary Expression {}\n", other)
+
+            // _reserved_identifier
+            "open" | "module" | "record" | "with" | "yield" | "seal" => panic!("Reserved Identifiers are not supported!"),
+            other => panic!("Unknown Expression Type: {}", other)
         }
     }
 
@@ -272,6 +295,7 @@ mod tests {
         parser.set_language(&tree_sitter_java::language()).expect("Error loading Java grammar");
         let tree = parser.parse(code, None).unwrap();
         let mut sm = SymbolMaker::new();
+        println!("{}", tree.root_node());
         Converter::new(code.as_bytes(), &mut sm).convert(tree.root_node());
         assert!(false)
     }

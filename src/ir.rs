@@ -40,8 +40,8 @@ impl SymbolMaker {
         Self { count: 0, names: Vec::new() }
     }
 
-    pub fn fresh(&mut self, name: String) -> Symbol {
-        self.names.push(name);
+    pub fn fresh(&mut self, name: &str) -> Symbol {
+        self.names.push(name.to_string());
         Symbol { id: self.names.len() }
     }
 
@@ -107,7 +107,9 @@ pub enum Operation {
     Phi,
     Continue,
     Break,
-    Assert
+    Assert,
+    Access,
+    Index
 }
 
 /*
