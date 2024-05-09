@@ -29,20 +29,19 @@ pub enum Literal {
     String(String)
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Symbol { id: usize }
 pub struct SymbolMaker {
-    count: u32,
     names: Vec<String>
 }
 impl SymbolMaker {
     pub fn new() -> Self {
-        Self { count: 0, names: Vec::new() }
+        Self { names: Vec::new() }
     }
 
     pub fn fresh(&mut self, name: &str) -> Symbol {
         self.names.push(name.to_string());
-        Symbol { id: self.names.len() }
+        Symbol { id: self.names.len() - 1 }
     }
 
     pub fn name(&self, sym: Symbol) -> &str {
@@ -54,6 +53,7 @@ impl SymbolMaker {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub enum Operation {
     // Arithmetic
     Add,
@@ -62,8 +62,10 @@ pub enum Operation {
     Mul,
     Div,
     Mod,
-    Inc,
-    Dec,
+    PreInc,
+    PreDec,
+    PostInc,
+    PostDec,
 
     // Modifying
     Set,
@@ -144,9 +146,10 @@ pub struct ImportStatement {
 }
 
 pub enum Operand {
+    This,
     C(Literal),
     V(Symbol),
-    T(Box<ExprTree>)
+    T(ExprTree)
 }
 
 pub struct ExprTree {
@@ -156,9 +159,8 @@ pub struct ExprTree {
 
 pub struct PrimStatement {
     pub name: Symbol,
-    pub op: Operation,
-    pub args: Vec<Operand>,
     pub typ: Typ,
+    pub exp: Operand,
     pub body: TreeRef
 }
 
@@ -175,7 +177,7 @@ pub struct ClassDeclaration {
     pub name: Symbol,
     pub members: Vec<(Symbol, Typ)>,
     pub methods: LinkedList<TreeRef>,
-    pub extends: Vec<Symbol>,
+    pub extends: Option<Symbol>,
     pub body: TreeRef
 }
 

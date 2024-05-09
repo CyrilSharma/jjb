@@ -1,6 +1,8 @@
 mod ir;
 mod converter;
 mod tshelpers;
+mod scope;
+mod printer;
 use converter::Converter;
 use ir::SymbolMaker;
 use tree_sitter::{Parser, TreeCursor};
