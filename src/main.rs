@@ -1,10 +1,9 @@
 mod ir;
 mod converter;
-mod tshelpers;
+mod tsretriever;
 mod scope;
 mod printer;
-mod labelstack;
-use converter::Converter;
+use converter::convert;
 use ir::SymbolMaker;
 use tree_sitter::{Parser, TreeCursor};
 
