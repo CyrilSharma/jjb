@@ -3,14 +3,19 @@
 use std::collections::LinkedList;
 
 use crate::ir::*;
+use crate::labelstack::LabelStack;
 use crate::tshelpers as H;
 use crate::scope::Scope;
-use crate::printer::Printer;
 use tree_sitter::Node;
+
+type TailTp = dyn Fn(&mut Converter) -> Box<Tree>;
+
+
 pub struct Converter<'l> {
     source: &'l [u8],
     sm: &'l mut SymbolMaker,
     scope: Scope<'l>,
+    lstack: LabelStack<'l>,
     entry_name: &'l str,
     entry_sym: Option<Symbol>
 }
@@ -21,113 +26,174 @@ impl<'l> Converter<'l> {
             entry_name: "Main",
             entry_sym: None,
             scope: Scope::new(),
+            lstack: LabelStack::new(),
             sm,
             source
         }
     }
 
-    pub fn convert(&mut self, root: Node) -> Tree {
-        assert!(root.kind() == "program");
-        let mut cursor = root.walk();
-        *self.statement(root.child(0).expect("Empty Program!"))
+    pub fn scope_in(&mut self) {
+        self.scope.scope_in();
+
+        // self.labels.scope_in();
     }
 
-    pub fn statement(&mut self, node: Node) -> Box<Tree> {
+    pub fn scope_out(&mut self) {
+        self.scope.scope_out();
+        // self.labels.scope_out();
+    }
+
+    pub fn convert(&mut self, root: Node) -> Box<Tree> {
+        assert!(root.kind() == "program");
+        let res = |this: &mut Self| Box::new(Tree::EntryPoint(this.sm.fresh("Main")));
+        self.statement(root.child(0).expect("Empty Program!"), &res)
+    }
+
+    pub fn statement(&mut self, node: Node, tail: &dyn Fn(&mut Self) -> Box<Tree>) -> Box<Tree> {
         match node.kind() {
-            // Top-Level Declarations...
+            /* ------ TOP-LEVEL DECLARATIONS -------- */
             "module_declaration" => panic!("Modules are not supported!"),
-            "package_declaration" => self.next(node), /* packages are inlined */
-            "import_declaration" => self.import_declaration(node),
-            "class_declaration" => self.class_declaration(node),
+            "package_declaration" => self.next(node, tail), /* packages are inlined */
+            "import_declaration" => self.import_declaration(node, tail),
+            "class_declaration" => self.class_declaration(node, tail),
             "record_declaration" => panic!("Records are not supported!"),
-            "interface_declaration" => todo!(),
+            "interface_declaration" => { println!("Warning: Interfaces are ignored!"); self.next(node, tail) },
             "annotation_type_declaration" => panic!("Annotations are not supported!"),
             "enum_declaration" => self.enum_declaration(node),
 
-            "expression_statement" => todo!(),
-            "labeled_statement" => todo!(),
-            "if_statement" => Box::new(Tree::If(IfStatement {
-                cond: self.expression(H::get_field(&node, "condition")),
-                btrue: self.statement(H::get_field(&node, "consequence")),
-                bfalse: node.child_by_field_name("alternative").map(|child| self.statement(child)),
-                body: self.next(node)
-            })),
-            "while_statement" => Box::new(Tree::Loop(LoopStatement {
-                cond: self.expression(H::get_field(&node, "condition")),
-                lbody: Some(self.statement(H::get_field(&node, "body"))),
-                body: self.next(node)
-            })),
+            /* ------ Method Statements ----------- */
+            "expression_statement" => self.expression_statement(node, tail),
+            "labeled_statement" => self.labeled_statement(node, tail),
+            "if_statement" => self.if_statement(node, tail),
+            "while_statement" => self.while_statement(node, tail),
             "for_statement" => todo!(),
             "enhanced_for_statement" => todo!(),
-            "block" => todo!(),
-            ";" => self.next(node),
-            "assert_statement" => Box::new(Tree::LetP(PrimStatement {
-                name: self.sm.fresh("assert"),
-                typ: Typ::Void,
-                exp: Operand::T(ExprTree {
-                    op: Operation::Assert,
-                    args: vec![node.child(1), node.child(2)].into_iter().flatten()
-                    .map(|x| self.expression(x)).collect()
-                }),
-                body: self.next(node)
-            })),
-            // requires special handling.
+            "block" => self.block(node, tail),
+            ";" => self.next(node, tail),
+            "assert_statement" => self.assert_statement(node, tail),
             "do_statement" => todo!(),
-            "break_statement" => Box::new(Tree::LetP(PrimStatement {
-                name: self.sm.fresh("break"),
-                typ: Typ::Void,
-                exp: Operand::T(ExprTree {
-                    op: Operation::Break,
-                    args: vec![]
-                }),
-                body: self.next(node)
-            })),
-            "continue_statement" => Box::new(Tree::LetP(PrimStatement {
-                name: self.sm.fresh("continue"),
-                typ: Typ::Void,
-                exp: Operand::T(ExprTree {
-                    op: Operation::Continue,
-                    args: vec![]
-                }),
-                body: self.next(node)
-            })),
+            "break_statement" => todo!(), // Box::new(Tree::Break()),
+            "continue_statement" => todo!(), // Box::new(Tree::Continue()),
             "return_statement" => Box::new(Tree::Return(ReturnStatement { 
                 val: node.named_child(0).map(|child| self.expression(child))
             })),
             "yield_statement" => panic!("Yield is unsupported!"),
-            "switch_expression" => self.switch_statement(node),
-            "synchronized_statement" => todo!(),
-            "local_variable_declaration" => todo!(),
+            "switch_expression" => self.switch_statement(node, tail),
+            "synchronized_statement" => panic!("Synchronized is unsupported!"),
+            "local_variable_declaration" => self.local_variable_declaration(node, tail),
             "throw_statement" => todo!(),
             "try_statement" => todo!(),
-            "try_with_resources_statement" => todo!(), 
-            _ => panic!("Unsupported statement!")
+            "try_with_resources_statement" => todo!(),
+            other => panic!("Unsupported statement {}!", other)
         }
     }
 
     /*
-     * Grabs the next statement.
-     * If you're a top-level node, this inserts the entry-point call.
-     * Otherwise, you must be at the end of a function or branch, so a jump is required.
+     * Grabs the next statement, if there is no next statement, tail is inserted.
      */
-    pub fn next(&mut self, node: Node) -> Box<Tree> {
+    pub fn next(&mut self, node: Node, tail: &dyn Fn(&mut Self) -> Box<Tree>) -> Box<Tree> {
         if let Some(sib) = node.next_named_sibling() {
-            return self.statement(sib)
+            self.statement(sib, tail)
+        } else {
+            tail(self)
         }
-        if let Some(p) = node.parent() {
-            if p.parent().is_none() {
-                return Box::new(Tree::EntryPoint(self.sm.fresh(self.entry_name)))
-            }
-        }
-        return Box::new(Tree::Jump)
     }
 
-    pub fn import_declaration(&mut self, node: Node) -> Box<Tree> {
+    pub fn expression_statement(&mut self, node: Node, tail: &dyn Fn(&mut Self) -> Box<Tree>) -> Box<Tree> {
+        Box::new(Tree::LetP(PrimStatement {
+            name: self.sm.fresh("expr_stmt"),
+            typ: Typ::Void,
+            exp: Some(self.expression(node.child(0).expect("Expression is non-null"))),
+            body: self.next(node, tail),
+            label: H::get_label(&node, self.source).map(|x| self.sm.fresh(x))
+        }))
+    }
+
+    pub fn labeled_statement(&mut self, node: Node, tail: &dyn Fn(&mut Self) -> Box<Tree>) -> Box<Tree> {
+        let label_str = H::get_text(&node.child(0).expect("Label does not exist!"), self.source);
+        let label_sym = self.sm.fresh(label_str);
+        self.lstack.push(Some((label_str, label_sym)));
+        let res = |this: &mut Self| { this.next(node, tail) };
+        self.statement(
+            node.child(2).expect("labeled statement lacks child!"),
+            &res
+        )
+    }
+
+    pub fn if_statement(&mut self, node: Node, tail: &dyn Fn(&mut Self) -> Box<Tree>) -> Box<Tree> {
+        let branch_tail = |this: &mut Converter| { Box::new(Tree::Break(todo!())) };
+        Box::new(Tree::If(IfStatement {
+            cond: self.expression(H::get_field(&node, "condition")),
+            btrue: self.statement(H::get_field(&node, "consequence"), &branch_tail),
+            bfalse: node.child_by_field_name("alternative").map(|child| self.statement(child, &branch_tail)),
+            label: self.sm.fresh(H::get_label(&node, self.source).unwrap_or("_if_")),
+            body: self.next(node, tail)
+        }))
+    }
+
+    pub fn while_statement(&mut self, node: Node, tail: &dyn Fn(&mut Self) -> Box<Tree>) -> Box<Tree> {
+        let loop_tail = |this: &mut Self| { Box::new(Tree::Continue(todo!())) };
+        Box::new(Tree::Loop(LoopStatement {
+            cond: self.expression(H::get_field(&node, "condition")),
+            lbody: Some(self.statement(H::get_field(&node, "body"), &loop_tail)),
+            label: self.sm.fresh(H::get_label(&node, self.source).unwrap_or("_loop_")),
+            body: self.next(node, tail)
+        }))
+    }
+
+    pub fn assert_statement(&mut self, node: Node, tail: &dyn Fn(&mut Self) -> Box<Tree>) -> Box<Tree> {
+        Box::new(Tree::LetP(PrimStatement {
+            name: self.sm.fresh("assert"),
+            typ: Typ::Void,
+            exp: Some(Operand::T(ExprTree {
+                op: Operation::Assert,
+                args: vec![node.child(1), node.child(2)].into_iter().flatten()
+                .map(|x| self.expression(x)).collect()
+            })),
+            label: None,
+            body: self.next(node, tail)
+        }))
+    }
+
+    pub fn local_variable_declaration(&mut self, node: Node, tail: &dyn Fn(&mut Self) -> Box<Tree>) -> Box<Tree> {
+        let tp = H::get_typ(&node, self.source);
+        let mut cur = node.named_child(1).expect("Declaration has 0 declarators!");
+        let mut syms = Vec::new();
+        let mut exps = Vec::new();
+        loop {
+            let name_str = H::get_field_text(&cur, "name", self.source);
+            let name_sym = self.sm.fresh(name_str);
+            let value = cur.child_by_field_name("value");
+            let exp = value.map(|x| Operand::C(H::get_lit(&x, self.source)));
+            syms.push(name_sym);
+            exps.push(exp);
+            self.scope.insert(name_str, name_sym);
+            if let Some(nbr) = cur.next_named_sibling() {
+                cur = nbr;
+                continue;
+            }
+            // TODO dimensions, for when we declare arrays...
+            break;
+        };
+        let mut res = self.next(node, tail);
+        for i in (0..syms.len()).rev() {
+            res = Box::new(Tree::LetP(PrimStatement {
+                name: syms[i],
+                label: None,
+                typ: tp.clone(),
+                exp: exps.remove(i),
+                body: res
+            }));
+        }
+        res
+    }
+
+    pub fn import_declaration(&mut self, node: Node, tail: &dyn Fn(&mut Self) -> Box<Tree>) -> Box<Tree> {
         let path = node.named_child(0).expect("Invalid Import")
             .utf8_text(self.source).expect("UTF8 Error");
-        return Box::new(Tree::LetI(ImportStatement {
+        return Box::new(Tree::LetI(ImportDeclaration {
             path: path.to_string(),
-            body: self.next(node)
+            body: self.next(node, tail)
         }));
     }
 
@@ -135,7 +201,7 @@ impl<'l> Converter<'l> {
         todo!()
     }
 
-    pub fn class_declaration(&mut self, node: Node) -> Box<Tree> {
+    pub fn class_declaration(&mut self, node: Node, tail: &dyn Fn(&mut Self) -> Box<Tree>) -> Box<Tree> {
         let cname = H::get_field_text(&node, "name", &self.source);
         let csym = self.sm.fresh(cname);
 
@@ -155,7 +221,7 @@ impl<'l> Converter<'l> {
         let mut members = Vec::new();
         let mut methods = LinkedList::new();
         if let Some(body) = node.child_by_field_name("body") {
-            self.scope.scope_in();
+            self.scope_in();
             let mut bcursor = body.walk();
             for child in body.named_children(&mut bcursor) {
                 match child.kind() {
@@ -164,7 +230,7 @@ impl<'l> Converter<'l> {
                     other => panic!("Parse Tree uses unknown node {}\n", other)
                 }
             }
-            self.scope.scope_out();
+            self.scope_out();
         }
         
         let cname = H::get_field_text(&node, "name", &self.source);
@@ -173,7 +239,7 @@ impl<'l> Converter<'l> {
             members,
             methods,
             extends: superclass,
-            body: self.next(node)
+            body: self.next(node, tail)
         }));
     }
 
@@ -184,15 +250,74 @@ impl<'l> Converter<'l> {
         (self.sm.fresh(name), typ)
     }
 
-    fn switch_statement(&mut self, node: Node) -> Box<Tree> {
+    fn switch_statement(&mut self, node: Node, tail: &dyn Fn(&mut Self) -> Box<Tree>) -> Box<Tree> {
         let arg = self.expression(H::get_field(&node, "condition"));
+        let mut cases: Vec<(Vec<Operand>, Box<Tree>)> = Vec::new();
+        let mut cur_args: Vec<Operand> = Vec::new();
+        let mut default: Option<Box<Tree>> = None;
+
+        let block = H::get_field(&node, "body");
+        let mut cursor = block.walk();
+        cursor.goto_first_child();
+        while cursor.goto_next_sibling() {
+            let node = cursor.node();
+            // The parser is a little janky in that it specifies
+            // That labels can occur multiple times in a block AND
+            // Blocks can occur multiple times, creating ambiguity.
+            // This handles both cases, even though it usualy just does the former.
+
+            match node.kind() {
+                "switch_block_statement_group" => {
+                    let (ops, tree) = self.switch_block_statement_group(node);
+                    if ops.len() != 0 {
+                        cur_args.extend(ops);
+                        if let Some(t) = tree {
+                            cases.push((cur_args.clone(), t));
+                            cur_args.clear();
+                        }; 
+                    } else {
+                        default = Some(tree.expect("Default case doesn't exist!"))
+                    }
+                },
+                "switch_rule" => panic!("switch_rule is unsupported"),
+                _ => break
+            }
+        }
+
+        let temp = self.sm.fresh("OOGA");
         Box::new(Tree::Switch(SwitchStatement {
             arg,
-            cases: todo!(),
-            branches: todo!(),
-            default: todo!(),
-            body: self.next(node)
+            label: temp, // TODO
+            cases: cases,
+            default: default,
+            body: self.next(node, tail)
         }))
+    }
+
+    fn switch_block_statement_group(&mut self, node: Node) -> (Vec<Operand>, Option<Box<Tree>>) {
+        let mut ops: Vec<Operand> = Vec::new();
+        let mut cur = node.walk();
+        cur.goto_first_child();
+        loop {
+            let child = cur.node();
+            match child.kind() {
+                "switch_label" => self.switch_label(child).map(|e| ops.push(e)),
+                _ => break
+            };
+            if !cur.goto_next_sibling() { return (ops, None) }
+            if !cur.goto_next_sibling() { return (ops, None) }
+        }
+        let tail = |_: &mut Self| { Box::new(Tree::Terminal) };
+        (ops, Some(self.statement(cur.node(), &tail)))
+    }
+
+    fn switch_label(&mut self, node: Node) -> Option<Operand> {
+        let child = node.child(0).expect("Empty Switch Label!");
+        match H::get_text(&child, self.source) {
+            "case" => Some(self.expression(node.child(1).expect("Empty Case!"))),
+            "default" => None,
+            _ => panic!("Unknown switch label!")
+        }
     }
 
     fn method_declaration(&mut self, node: Node) -> Box<Tree> {
@@ -204,7 +329,7 @@ impl<'l> Converter<'l> {
         let mods = node.named_child(0).expect("Method has 0 children.");
         if mods.kind() == "modifiers" {
             let mut cursor = mods.walk();
-            for child in mods.named_children(&mut cursor) {
+            for child in mods.children(&mut cursor) {
                 modifiers.push(H::get_text(&child, self.source).to_string());
             }
         }
@@ -232,7 +357,8 @@ impl<'l> Converter<'l> {
             }
         }
         
-        let body = node.child_by_field_name("body").map(|x| self.block(x));
+        let tail = |_: &mut Self| { Box::new(Tree::Return(ReturnStatement { val: None } )) };
+        let body = node.child_by_field_name("body").map(|x| self.block(x, &tail));
         Box::new(Tree::LetF(FunDeclaration {
             name: name_sym,
             return_typ: rtyp,
@@ -243,20 +369,22 @@ impl<'l> Converter<'l> {
         }))
     }
 
-    pub fn block(&mut self, block: Node) -> Box<Tree> {
-        self.scope.scope_in();
+    pub fn block(&mut self, block: Node, tail: &dyn Fn(&mut Self) -> Box<Tree>) -> Box<Tree> {
+        self.scope_in();
         let res = if let Some(child) = block.named_child(0) {
-            self.statement(child)
+            let child_tail = |this: &mut Self| {
+                this.next(block, tail)
+            };
+            self.statement(child, &child_tail)
         } else {
             todo!()
         };
-        self.scope.scope_out();
+        self.scope_out();
         res
     }
 
     pub fn expression(&mut self, node: Node) -> Operand {
         use Operand as O;
-        use Literal as L;
         let source = self.source;
         match node.kind() {
             "assignment_expression" => self.binary_expression(node),
@@ -269,7 +397,20 @@ impl<'l> Converter<'l> {
                            self.expression(H::get_field(&node, "consequence")),
                            self.expression(H::get_field(&node, "alternative"))]
             }),
-            "update_expression" => todo!(),
+            "update_expression" => {
+                use Operand::*;
+                use Operation::*;
+                match node.child(0).expect("Update Expression Has Child").kind() {
+                    "++" => return T(ExprTree { op: PreInc, args: vec![self.expression(node.child(1).expect(""))] }),
+                    "--" => return T(ExprTree { op: PreDec, args: vec![self.expression(node.child(1).expect(""))] }),
+                    _ => ()
+                }
+                match node.child(1).expect("Update Expression Has Child").kind() {
+                    "++" => return T(ExprTree { op: PreInc, args: vec![self.expression(node.child(0).expect(""))] }),
+                    "--" => return T(ExprTree { op: PreDec, args: vec![self.expression(node.child(0).expect(""))] }),
+                    _ => panic!("Unknown Updated Expression!")
+                }
+            },
             "cast_expression" => todo!(),
             "unary_expression" => Operand::T(ExprTree {
                 op: H::get_op(&node, source),
@@ -280,17 +421,10 @@ impl<'l> Converter<'l> {
             //------- PRIMARY EXPRESSIONS ---------//
 
             // _literal
-            "decimal_integer_literal" => O::C(L::Long(H::parse_text(&node, source))),
-            "hex_integer_literal" => O::C(L::Long(H::parse_text(&node, source))),
-            "octal_integer_literal" => O::C(L::Long(H::parse_text(&node, source))),
-            "binary_integer_literal" => O::C(L::Long(H::parse_text(&node, source))),
-            "decimal_floating_point_literal" => O::C(L::Double(H::parse_text(&node, source))),
-            "hex_floating_point_literal" => O::C(L::Long(H::parse_text(&node, source))),
-            "true" => O::C(L::Bool(true)),
-            "false" => O::C(L::Bool(false)),
-            "character_literal" => O::C(L::Char(H::parse_text(&node, source))),
-            "string_literal" => O::C(L::String(H::parse_text(&node, source))),
-            "null_literal" => O::C(L::Null),
+            "decimal_integer_literal" | "hex_integer_literal" | "octal_integer_literal" |
+            "binary_integer_literal" | "decimal_floating_point_literal" | "hex_floating_point_literal" |
+            "true" | "false" | "character_literal" | "string_literal" | "null_literal" =>
+                O::C(H::get_lit(&node, source)),
 
             "class_literal" => panic!("Class Literals are not supported!"),
             "this" => O::This,
@@ -300,7 +434,7 @@ impl<'l> Converter<'l> {
                     &format!("Identifier {} not found", iname)))
             }
 
-            "parenthesized_expression" => self.expression(node.named_child(1).expect("parenthesized_expression")),
+            "parenthesized_expression" => self.expression(node.child(1).expect("parenthesized_expression")),
             "object_creation_expression" => todo!(),
             "field_access" => O::T(ExprTree {
                 op: Operation::Access,
@@ -338,7 +472,7 @@ impl<'l> Converter<'l> {
 #[cfg(test)]
 mod tests {
     use tree_sitter::Parser;
-
+    use crate::printer::Printer;
     use super::*;
 
     #[test]
@@ -348,6 +482,21 @@ mod tests {
         class Test extends Object {
             int y;
             static int thing(int x, int z) throws Exception {
+                int a, b, c = 3;
+                label: a += 2;
+                switch (x) {
+                    case 0:
+                    case 1: return 2;
+                    case 2:
+                    case 3: return a;
+                    case 4: return 3;
+                    default: return 2;
+                }
+                if (x < 2) {
+                    return 3;
+                } else {
+                    return 2;
+                }
                 return x * 2;
             }
         }

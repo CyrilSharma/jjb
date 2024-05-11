@@ -14,17 +14,31 @@ impl<'l> Printer<'l> {
         }
 
         match tree {
-            Tree::Jump => (),
-            Tree::LetI(ImportStatement { path, body }) => {
+            Tree::LetI(ImportDeclaration { path, body }) => {
                 self.println(&format!("import {};", path));
                 self.print_tree(body);
             },
-            Tree::LetP(PrimStatement { name, typ, exp, body }) => {
-                self.println(&format!("{} {} = {};",
-                    self.serialize_tp(typ),
-                    self.sm.uname(*name),
-                    self.serialize_op(exp)
-                ));
+            Tree::LetP(PrimStatement { name, typ, exp, body, label }) => {
+                if *typ != Typ::Void {
+                    if let Some(e) = exp {
+                        self.println(&format!("{} {} = {};",
+                            self.serialize_tp(typ),
+                            self.sm.uname(*name),
+                            self.serialize_op(e)
+                        ));
+                    } else {
+                        self.println(&format!("{} {};",
+                            self.serialize_tp(typ),
+                            self.sm.uname(*name),
+                        ));
+                    }
+                } else {
+                    if let Some(e) = exp {
+                        self.println(&format!("{};",
+                            self.serialize_op(e)
+                        ));
+                    }
+                }
                 self.print_tree(body);
             },
             Tree::LetF(FunDeclaration { name, args, modifiers, throws, return_typ, body }) => {
@@ -65,19 +79,33 @@ impl<'l> Printer<'l> {
                 self.print_tree(body);
             },
             Tree::LetE(_) => todo!(),
-            Tree::Switch(_) => todo!(),
-            Tree::Loop(LoopStatement { cond, lbody, body }) => {
+            Tree::Switch(SwitchStatement { arg, cases, default, body, label }) =>  {
+                self.println(&format!("switch ({}) {{", self.serialize_op(arg)));
+                scope!({
+                    for (ops, tree) in cases {
+                        for op in ops {
+                            self.println(&format!("case {}: ", self.serialize_op(op)));
+                        }
+                        scope!({ self.print_tree(tree) });
+                    }
+                    self.println("default: ");
+                    if let Some(d) = default { scope!({ self.print_tree(d) }); } 
+                });
+                self.println("}");
+                self.print_tree(body);
+            },
+            Tree::Loop(LoopStatement { cond, lbody, body, label }) => {
                 self.println(&format!("while ({}) {{\n", self.serialize_op(cond)));
                 scope!({ lbody.as_ref().map(|t| self.print_tree(t)) });
                 self.println("}");
                 self.print_tree(body);
             }
-            Tree::AppF(_) => todo!(),
-            Tree::If(IfStatement { cond, btrue, bfalse, body }) => {
-                self.println(&format!("if ({}) {{\n", self.serialize_op(cond)));
+            Tree::If(IfStatement { cond, btrue, bfalse, body, label }) => {
+                self.println(&format!("if ({}) {{", self.serialize_op(cond)));
                 scope!({ self.print_tree(btrue) });
                 self.println("} else {");
                 scope!({ bfalse.as_ref().map(|x| self.print_tree(x)) });
+                self.println("}");
                 self.print_tree(body);
             },
             Tree::Try(_) => todo!(),
@@ -90,7 +118,8 @@ impl<'l> Printer<'l> {
             },
             Tree::EntryPoint(sym) => self.println(
                 &format!("// {}();", self.sm.uname(*sym))
-            )
+            ),
+            other => todo!()
         }
     }
 
@@ -157,8 +186,10 @@ impl<'l> Printer<'l> {
             Mul => "*",
             Div => "/",
             Mod => "%",
-            Inc => "++",
-            Dec => "--",
+            PreInc => "++",
+            PreDec => "--",
+            PostInc => "++",
+            PostDec => "--",
             Set => "=",
             PSet => "+=",
             SSet => "-=", 

@@ -1,5 +1,6 @@
-use std::collections::LinkedList;
+use std::{collections::LinkedList, rc::Rc};
 
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Typ {
     Void,
     Bool,
@@ -16,6 +17,7 @@ pub enum Typ {
     Class(Symbol)
 }
 
+#[derive(Clone, Debug)]
 pub enum Literal {
     Null,
     Bool(bool),
@@ -29,7 +31,7 @@ pub enum Literal {
     String(String)
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Symbol { id: usize }
 pub struct SymbolMaker {
     names: Vec<String>
@@ -123,28 +125,34 @@ pub enum Operation {
  * Continue, Break, and Import are all considered Primitives.
  */
 
+
+// Note: there's no need for classes and imports to have body statements.
+// Similar to functions, we can just have a top level list of these things in Program.
 type TreeRef = Box<Tree>;
 pub enum Tree {
-    Jump,
-    LetI(ImportStatement),
-    LetP(PrimStatement),
+    LetI(ImportDeclaration),
     LetF(FunDeclaration),
     LetC(ClassDeclaration),
     LetE(EnumDeclaration),
+    LetCont(ContDeclaration),
+    LetP(PrimStatement),
     Switch(SwitchStatement),
     Loop(LoopStatement),
-    AppF(AppFStatement),
     If(IfStatement),
     Try(TryStatement),
     Return(ReturnStatement),
-    EntryPoint(Symbol)
+    Continue(Symbol),
+    Break(Symbol),
+    EntryPoint(Symbol),
+    Terminal /* bandaid fix for switches */
 }
 
-pub struct ImportStatement {
+pub struct ImportDeclaration {
     pub path: String,
     pub body: TreeRef
 }
 
+#[derive(Clone, Debug)]
 pub enum Operand {
     This,
     C(Literal),
@@ -152,6 +160,7 @@ pub enum Operand {
     T(ExprTree)
 }
 
+#[derive(Clone, Debug)]
 pub struct ExprTree {
     pub op: Operation,
     pub args: Vec<Operand>
@@ -160,7 +169,8 @@ pub struct ExprTree {
 pub struct PrimStatement {
     pub name: Symbol,
     pub typ: Typ,
-    pub exp: Operand,
+    pub label: Option<Symbol>,
+    pub exp: Option<Operand>,
     pub body: TreeRef
 }
 
@@ -189,29 +199,31 @@ pub struct EnumDeclaration {
     pub body: TreeRef
 }
 
+pub struct ContDeclaration {
+    pub name: Symbol,
+    pub cbody: TreeRef,
+    pub body: TreeRef
+}
+
 pub struct SwitchStatement {
     pub arg: Operand,
-    pub cases: Vec<Literal>,
-    pub branches: Vec<TreeRef>,
-    pub default: TreeRef,
+    pub label: Symbol,
+    pub cases: Vec<(Vec<Operand>, Box<Tree>)>,
+    pub default: Option<Box<Tree>>,
     pub body: TreeRef
 }
 
 // All other loops will be translated into this.
 pub struct LoopStatement {
     pub cond: Operand,
+    pub label: Symbol,
     pub lbody: Option<TreeRef>,
-    pub body: TreeRef
-}
-
-pub struct AppFStatement {
-    pub fname: Symbol,
-    pub args: Vec<Operand>,
     pub body: TreeRef
 }
 
 pub struct IfStatement {
     pub cond: Operand,
+    pub label: Symbol,
     pub btrue: TreeRef,
     pub bfalse: Option<TreeRef>,
     pub body: TreeRef
@@ -219,6 +231,7 @@ pub struct IfStatement {
 
 pub struct TryStatement {
     pub main: TreeRef,
+    pub label: Symbol,
     // The class symbol and the arg symbol.
     pub exceptions: Vec<(Symbol, Symbol)>,
     pub catches: Vec<TreeRef>,

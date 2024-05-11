@@ -3,6 +3,7 @@ mod converter;
 mod tshelpers;
 mod scope;
 mod printer;
+mod labelstack;
 use converter::Converter;
 use ir::SymbolMaker;
 use tree_sitter::{Parser, TreeCursor};

@@ -20,11 +20,18 @@ pub fn get_field<'tree>(node: &'tree Node<'tree>, field_name: &str) -> Node<'tre
         .unwrap_or_else(|| panic!("Field '{}' is missing", field_name))
 }
 
-// TODO: change this to return a &str, only if everything else works...
 pub fn get_field_text<'l>(node: &Node, field_name: &str, source: &'l [u8]) -> &'l str {
     get_field(node, field_name)
         .utf8_text(source)
         .unwrap_or_else(|_| panic!("Field '{}' contains invalid UTF-8", field_name))
+}
+
+pub fn get_label<'l>(node: &Node, source: &'l [u8]) -> Option<&'l str> {
+    node.parent().map(|p| if p.kind() == "labeled_statement" {
+        Some(get_text(&node.child(0).expect("label DNE!"), source))
+    } else {
+        None
+    }).flatten()
 }
 
 pub fn get_typ(node: &Node, source: &[u8]) -> Typ {
@@ -52,6 +59,7 @@ pub fn get_op(node: &Node, source: &[u8]) -> Operation {
         "!=" => O::Neq,
         "&&" => O::LAnd,
         "||" => O::LOr,
+
         "+" => O::Add,
         "-" => O::Sub,
         "*" => O::Mul,
@@ -63,6 +71,39 @@ pub fn get_op(node: &Node, source: &[u8]) -> Operation {
         "<<" => O::Shl,
         ">>" => O::Shr,
         ">>>" => O::UShr,
+        "!" => O::LNot,
+        "~" => O::Not,
+
+        "+=" => O::PSet,
+        "-=" => O::SSet,
+        "*=" => O::MSet,
+        "/=" => O::DSet,
+        "%=" => O::ModSet,
+        "&=" => O::AndSet,
+        "|=" => O::OrSet,
+        "^=" => O::XorSet,
+        ">>=" => O::ShrSet,
+        ">>>=" => O::UshrSet,
+        "<<=" => O::ShlSet,
+
         other => panic!("Unknown Tree-Sitter Op: {}\n", other)
+    }
+}
+
+pub fn get_lit(node: &Node, source: &[u8]) -> Literal {
+    use Literal::*;
+    match node.kind() {
+        "decimal_integer_literal" => Long(parse_text(&node, source)),
+        "hex_integer_literal" => Long(parse_text(&node, source)),
+        "octal_integer_literal" => Long(parse_text(&node, source)),
+        "binary_integer_literal" => Long(parse_text(&node, source)),
+        "decimal_floating_point_literal" => Double(parse_text(&node, source)),
+        "hex_floating_point_literal" => Long(parse_text(&node, source)),
+        "true" => Bool(true),
+        "false" => Bool(false),
+        "character_literal" => Char(parse_text(&node, source)),
+        "string_literal" => String(parse_text(&node, source)),
+        "null_literal" => Null,
+        other => panic!("Unknown literal {}", other)
     }
 }
