@@ -80,7 +80,11 @@ impl<'l> Printer<'l> {
             },
             Tree::LetE(_) => todo!(),
             Tree::Switch(SwitchStatement { arg, cases, default, body, label }) =>  {
-                self.println(&format!("switch ({}) {{", self.serialize_op(arg)));
+                self.println(
+                    &format!("{}: switch ({}) {{",
+                    self.sm.uname(*label),
+                    self.serialize_op(arg))
+                );
                 scope!({
                     for (ops, tree) in cases {
                         for op in ops {
@@ -95,13 +99,21 @@ impl<'l> Printer<'l> {
                 self.print_tree(body);
             },
             Tree::Loop(LoopStatement { cond, lbody, body, label }) => {
-                self.println(&format!("while ({}) {{\n", self.serialize_op(cond)));
+                self.println(&format!(
+                    "{}: while ({}) {{",
+                    self.sm.uname(*label),
+                    self.serialize_op(cond))
+                );
                 scope!({ lbody.as_ref().map(|t| self.print_tree(t)) });
                 self.println("}");
                 self.print_tree(body);
             }
             Tree::If(IfStatement { cond, btrue, bfalse, body, label }) => {
-                self.println(&format!("if ({}) {{", self.serialize_op(cond)));
+                self.println(
+                    &format!("{}: if ({}) {{",
+                    self.sm.uname(*label),
+                    self.serialize_op(cond))
+                );
                 scope!({ self.print_tree(btrue) });
                 self.println("} else {");
                 scope!({ bfalse.as_ref().map(|x| self.print_tree(x)) });
@@ -119,7 +131,23 @@ impl<'l> Printer<'l> {
             Tree::EntryPoint(sym) => self.println(
                 &format!("// {}();", self.sm.uname(*sym))
             ),
-            other => todo!()
+            Tree::Block(BlockStatement { label, bbody, body }) => {
+                let mut buf = "".to_owned();
+                label.map(|l| buf += &format!("{}: ", self.sm.uname(l)));
+                buf += "{";
+                self.println(&buf);
+                scope!({ self.print_tree(&bbody) });
+                self.println("}");
+                self.print_tree(body);
+            },
+            Tree::LetCont(ContDeclaration { name, body }) => {
+                self.println(&format!("/* -- continuation {} -- */", self.sm.uname(*name)));
+                self.print_tree(body);
+            },
+            Tree::Continue(sym) => self.println(&format!("continue {};", self.sm.uname(*sym))),
+            Tree::Break(sym) => self.println(&format!("break {};", self.sm.uname(*sym))),
+            Tree::Terminal => ()
+            // other => todo!()
         }
     }
 
@@ -143,7 +171,7 @@ impl<'l> Printer<'l> {
                         self.serialize_operator(*op),
                         self.serialize_op(&args[1])
                     ),
-                    PreInc | PreDec | Not if args.len() == 1 => format!("{}({})",
+                    PreInc | PreDec | Not | LNot if args.len() == 1 => format!("{}({})",
                         self.serialize_operator(*op),
                         self.serialize_op(&args[0]),
                     ),
@@ -210,7 +238,7 @@ impl<'l> Printer<'l> {
             LEq => "<=",
             LAnd => "&&",
             LOr => "||",
-            LNot => "!=",
+            LNot => "!",
             Not => "~",
             Shl => "<<",
             Shr => ">>",
@@ -219,13 +247,14 @@ impl<'l> Printer<'l> {
             Or => "|",
             Xor => "^",
             InstanceOf => "instanceof",
-            Ternary => "ternary",
-            Phi => "phi",
-            Continue => "continue",
-            Break => "break",
             Assert => "assert",
+            Index => "index",
+            Throw => "throw",
+            
+            Phi => "phi",
+
+            Ternary => "ternary",
             Access => "access",
-            Index => "index"
         }
 
     }

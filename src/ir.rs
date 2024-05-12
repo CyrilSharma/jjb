@@ -109,11 +109,10 @@ pub enum Operation {
 
     // Custom
     Phi,
-    Continue,
-    Break,
     Assert,
     Access,
-    Index
+    Index,
+    Throw
 }
 
 /*
@@ -136,6 +135,7 @@ pub enum Tree {
     LetE(EnumDeclaration),
     LetCont(ContDeclaration),
     LetP(PrimStatement),
+    Block(BlockStatement),
     Switch(SwitchStatement),
     Loop(LoopStatement),
     If(IfStatement),
@@ -144,7 +144,16 @@ pub enum Tree {
     Continue(Symbol),
     Break(Symbol),
     EntryPoint(Symbol),
-    Terminal /* bandaid fix for switches */
+    // Bandaid fix for switches
+    // Correct solution is to introduce a label for each case.
+    // And to break out of this label.
+    Terminal
+}
+
+pub struct BlockStatement {
+    pub label: Option<Symbol>,
+    pub bbody: TreeRef,
+    pub body: TreeRef
 }
 
 pub struct ImportDeclaration {
@@ -201,7 +210,6 @@ pub struct EnumDeclaration {
 
 pub struct ContDeclaration {
     pub name: Symbol,
-    pub cbody: TreeRef,
     pub body: TreeRef
 }
 

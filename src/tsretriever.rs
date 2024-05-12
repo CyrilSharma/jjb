@@ -32,14 +32,6 @@ impl<'l> TsRetriever<'l> {
             .unwrap_or_else(|_| panic!("Field '{}' contains invalid UTF-8", field_name))
     }
     
-    pub fn get_label(&self, node: &Node) -> Option<&'l str> {
-        node.parent().map(|p| if p.kind() == "labeled_statement" {
-            Some(self.get_text(&node.child(0).expect("label DNE!")))
-        } else {
-            None
-        }).flatten()
-    }
-    
     pub fn get_typ(&self, node: &Node) -> Typ {
         match self.get_field_text(node, "type") {
             "byte" => Typ::Byte,
@@ -79,7 +71,8 @@ impl<'l> TsRetriever<'l> {
             ">>>" => O::UShr,
             "!" => O::LNot,
             "~" => O::Not,
-    
+            
+            "=" => O::Set,
             "+=" => O::PSet,
             "-=" => O::SSet,
             "*=" => O::MSet,
