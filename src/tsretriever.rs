@@ -32,20 +32,6 @@ impl<'l> TsRetriever<'l> {
             .unwrap_or_else(|_| panic!("Field '{}' contains invalid UTF-8", field_name))
     }
     
-    pub fn get_typ(&self, node: &Node) -> Typ {
-        match self.get_field_text(node, "type") {
-            "byte" => Typ::Byte,
-            "short" => Typ::Short,
-            "int" => Typ::Int,
-            "long" => Typ::Long,
-            "char" => Typ::Char,
-            "float" => Typ::Float,
-            "double" => Typ::Double,
-            "boolean" => Typ::Bool,
-            other => panic!("Unknown Tree-Sitter Type: {}\n", other)
-        }
-    }
-    
     pub fn get_op(&self, node: &Node) -> Operation {
         use Operation as O;
         match self.get_field_text(node, "operator") {

@@ -1,4 +1,5 @@
 use std::{collections::LinkedList, rc::Rc};
+use crate::symbolmaker::Symbol;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Typ {
@@ -29,30 +30,6 @@ pub enum Literal {
     Float(f32),
     Double(f64),
     String(String)
-}
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct Symbol { id: usize }
-pub struct SymbolMaker {
-    names: Vec<String>
-}
-impl SymbolMaker {
-    pub fn new() -> Self {
-        Self { names: Vec::new() }
-    }
-
-    pub fn fresh(&mut self, name: &str) -> Symbol {
-        self.names.push(name.to_string());
-        Symbol { id: self.names.len() - 1 }
-    }
-
-    pub fn name(&self, sym: Symbol) -> &str {
-        &self.names[sym.id as usize]
-    }
-
-    pub fn uname(&self, sym: Symbol) -> String {
-        format!("{}{}", self.names[sym.id], sym.id)
-    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -108,6 +85,8 @@ pub enum Operation {
     Ternary,
 
     // Custom
+    New,
+    Call,
     Phi,
     Assert,
     Access,
@@ -120,8 +99,6 @@ pub enum Operation {
  * Easy to manipulate,
  * Easy to convert back into Java,
  * Easy to unroll (high-level structures are kept).
- * 
- * Continue, Break, and Import are all considered Primitives.
  */
 
 
@@ -144,9 +121,6 @@ pub enum Tree {
     Continue(Symbol),
     Break(Symbol),
     EntryPoint(Symbol),
-    // Bandaid fix for switches
-    // Correct solution is to introduce a label for each case.
-    // And to break out of this label.
     Terminal
 }
 
@@ -164,6 +138,7 @@ pub struct ImportDeclaration {
 #[derive(Clone, Debug)]
 pub enum Operand {
     This,
+    Super,
     C(Literal),
     V(Symbol),
     T(ExprTree)
@@ -197,7 +172,10 @@ pub struct ClassDeclaration {
     pub members: Vec<(Symbol, Typ)>,
     pub methods: LinkedList<TreeRef>,
     pub extends: Option<Symbol>,
-    pub body: TreeRef
+    pub body: TreeRef,
+    // I never use nested classes, and it's relatively easy to avoid them.
+    // If this gets open-sourced, this is something I could work on.
+    // pub classes: LinkedList<TreeRef>,
 }
 
 // We don't have support for more complicated enums, yet

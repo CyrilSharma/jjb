@@ -1,9 +1,10 @@
 // https://github.com/tree-sitter/tree-sitter-java/blob/master/grammar.js
 // We parse a subset of the above grammar.
 
-use std::collections::LinkedList;
-use std::slice::Iter;
+use std::collections::{HashMap, LinkedList};
+use crate::directory::Directory;
 use crate::ir::*;
+use crate::symbolmaker::{Symbol, SymbolMaker};
 use crate::tsretriever::TsRetriever;
 use crate::scope::Scope;
 use tree_sitter::Node;
@@ -11,15 +12,19 @@ use tree_sitter::Node;
 type TailTp<'l> = &'l dyn Fn(&mut State) -> Box<Tree>;
 
 struct State<'l> {
-    tsret: TsRetriever<'l>,
-    sm: &'l mut SymbolMaker,
-    scope: Scope<'l>,
     entry_name: &'l str,
     entry_sym: Option<Symbol>,
-    label: Option<Symbol>,
+    class_sym: Option<Symbol>,
+    var_scope: Scope<'l>,
+    class_scope: Scope<'l>,
+    directory: Directory<'l>,
+    type_map: HashMap<Symbol, Typ>,
+    tsret: TsRetriever<'l>,
+    label_stk: Vec<(&'l str, Symbol)>,
     break_label: Option<Symbol>,
     continue_label: Option<Symbol>,
-    label_stk: Vec<(&'l str, Symbol)>
+    label: Option<Symbol>,
+    sm: &'l mut SymbolMaker
 }
 
 impl<'l> State<'l> {
@@ -27,7 +32,11 @@ impl<'l> State<'l> {
         Self {
             entry_name: "Main",
             entry_sym: None,
-            scope: Scope::new(),
+            class_sym: None,
+            var_scope: Scope::new(),
+            class_scope: Scope::new(),
+            directory: Directory::new(),
+            type_map: HashMap::new(),
             tsret: TsRetriever::new(source),
             label_stk: Vec::new(),
             break_label: None,
@@ -43,22 +52,92 @@ impl<'l> State<'l> {
         res
     }
 
-    pub fn find_label(&mut self, name: &'l str) -> Option<Symbol> {
+    pub fn find_label(&self, name: &'l str) -> Option<Symbol> {
         for i in (0..self.label_stk.len()).rev() {
             let (cname, csym) = self.label_stk[i];
             if cname == name { return Some(csym) }
         }
         return None
     }
+
+    pub fn get_typ(&self, node: &Node) -> Typ {
+        match self.tsret.get_field_text(node, "type") {
+            "void" => Typ::Void,
+            "byte" => Typ::Byte,
+            "short" => Typ::Short,
+            "int" => Typ::Int,
+            "long" => Typ::Long,
+            "char" => Typ::Char,
+            "float" => Typ::Float,
+            "double" => Typ::Double,
+            "boolean" => Typ::Bool,
+            other => Typ::Class(self.class_scope
+                .find(other)
+                .expect(&format!("Unknown Class Type {}", other))
+            )
+        }
+    }
+
+    pub fn scope_in(&mut self) {
+        self.var_scope.scope_in();
+        self.class_scope.scope_in();
+    }
+
+    pub fn scope_out(&mut self) {
+        self.var_scope.scope_out();
+        self.class_scope.scope_out();
+    }
 }
 
 pub fn convert(root: Node, source: &[u8], sm: &mut SymbolMaker) -> Box<Tree> {
     assert!(root.kind() == "program");
     let mut state = State::new(source, sm);
+    add_declarations(root, &mut state);
     let res = |s: &mut State| Box::new(Tree::EntryPoint(s.sm.fresh("Main")));
     statement(root.child(0).expect("Empty Program!"), &res, &mut state)
 }
 
+// TODO: support for enums!
+fn add_declarations(root: Node, state: &mut State) {
+    let mut cursor = root.walk();
+    for top in root.named_children(&mut cursor) {
+        if top.kind() != "class_declaration" { continue }
+        let cname = state.tsret.get_field_text(&top, "name");
+        let csym = state.sm.fresh(cname);
+        state.class_scope.insert(cname, csym);
+
+        let mut methods = HashMap::new();
+        let mut members = HashMap::new();
+        let body = state.tsret.get_field(&top, "body");
+        let mut bcursor = body.walk();
+        for child in body.named_children(&mut bcursor) { 
+            match child.kind() {
+                "class_declatation" => panic!("Inner classes are not supported!"),
+                "enum_declaration" => panic!("Inner enums are not supported!"),
+                "method_declaration" => {
+                    let fname = state.tsret.get_field_text(&child, "name");
+                    let fsym = state.sm.fresh(fname);
+                    println!("class: {}, fun: {}", cname, fname);
+                    let rtyp = state.get_typ(&child);
+                    state.type_map.insert(fsym, rtyp);
+                    methods.insert(fname, fsym);
+                }
+                "field_declaration" => {
+                    let typ = state.get_typ(&child);
+                    let declarator = state.tsret.get_field(&child, "declarator");
+                    let name = state.tsret.get_field_text(&declarator, "name");
+                    let var_sym = state.sm.fresh(name);
+                    state.type_map.insert(var_sym, typ);
+                    members.insert(name, var_sym);
+                },
+                other => panic!("Parse Tree uses unknown node {}\n", other)
+            }
+        }
+        state.directory.add_class(csym, methods, members);
+    }
+}
+
+/* ------ STATEMENTS ------ */
 fn statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
     match node.kind() {
         /* ------ TOP-LEVEL DECLARATIONS -------- */
@@ -120,6 +199,114 @@ fn next(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
     }
 }
 
+/* ------------ DECLARATIONS ------------ */
+fn import_declaration(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
+    let path = state.tsret.get_text(&node.named_child(0).expect("Invalid Import"));
+    node.child(1).map(|x| if x.kind() == "static" { panic!("Static imports are not yet supported.") } );
+    return Box::new(Tree::LetI(ImportDeclaration {
+        path: path.to_string(),
+        body: next(node, tail, state)
+    }));
+}
+
+fn class_declaration(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
+    let cname = state.tsret.get_field_text(&node, "name");
+    let csym = state.class_scope.find(cname).expect("Class Symbol was not inserted!");
+    let superclass = node.child_by_field_name("superclass").map(|sc| {
+        let pname = state.tsret.get_text(&sc.child(1).expect("Missing Super."));
+        if let Some(sym) = state.class_scope.find(pname) { sym }
+        else { state.sm.fresh_unknown(pname) }
+    });
+
+    // Note that we do this here, because in the first pass it's unclear whether the parent
+    // Hasn't been added yet, or if it just doesn't exist in the heirarchy.
+    superclass.map(|psym| state.directory.add_parent(csym, psym));
+    let members = state.directory.members(csym)
+        .expect("class symbol was not inserted!")
+        .iter()
+        .map(|x| (*x, *state.type_map.get(x).expect("")))
+        .collect::<Vec<(Symbol, Typ)>>();
+    let mut methods = LinkedList::new();
+    if let Some(body) = node.child_by_field_name("body") {
+        state.scope_in();
+        state.class_sym = Some(csym);
+        let mut bcursor = body.walk();
+        for child in body.named_children(&mut bcursor) { 
+            match child.kind() {
+                "method_declaration" => {
+                    let text = state.tsret.get_field_text(&child, "name");
+                    let name = *state.directory.resolve_method(csym, text).expect(
+                        &format!("class {}, function {} wasn't inserted.", cname, text)
+                    );
+                    methods.push_back(method_declaration(child, state, name));
+                },
+                _ => ()
+            }
+        };
+        state.class_sym = None;
+        state.scope_out();
+    }
+    return Box::new(Tree::LetC(ClassDeclaration {
+        name: csym,
+        members,
+        methods,
+        extends: superclass,
+        body: next(node, tail, state)
+    }));
+}
+
+// TODO: Enums!
+fn enum_declaration(node: Node, state: &mut State) -> Box<Tree> {
+    todo!()
+}
+
+fn method_declaration(node: Node, state: &mut State, name: Symbol) -> Box<Tree> {
+    let rtyp = *state.type_map.get(&name).expect("Funtype was not inserted!");
+    let mut modifiers = Vec::new();
+    let mods = node.named_child(0).expect("Method has 0 children.");
+    // All we really care about is whether the method is static.
+    if mods.kind() == "modifiers" {
+        let mut cursor = mods.walk();
+        for child in mods.children(&mut cursor) {
+            modifiers.push(state.tsret.get_text(&child).to_string());
+        }
+    }
+
+    let mut throws: Vec<String> = Vec::new();
+    let child_count = node.child_count();
+    if let Some(c) = node.child(child_count - 2) {
+        if c.kind() == "throws" {
+            let mut cursor = c.walk();
+            cursor.goto_first_child();
+            while cursor.goto_next_sibling() {
+                throws.push(state.tsret.get_text(&cursor.node()).to_string())
+            }
+        }
+    }
+
+    let mut args = Vec::new();
+    if let Some(params) = node.child_by_field_name("parameters") {
+        let mut cursor = params.walk();
+        for child in params.named_children(&mut cursor) {
+            let argname = state.tsret.get_field_text(&child, "name");
+            let argsym = state.sm.fresh(argname);
+            args.push((argsym, state.get_typ(&node)));
+            state.var_scope.insert(argname, argsym);
+        }
+    }
+    
+    let tail = |_: &mut State| { Box::new(Tree::Return(ReturnStatement { val: None } )) };
+    let body = node.child_by_field_name("body").map(|x| block(x, &tail, state));
+    Box::new(Tree::LetF(FunDeclaration {
+        name,
+        return_typ: rtyp,
+        args,
+        throws,
+        modifiers,
+        body
+    }))
+}
+
 fn break_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
     Box::new(Tree::Break(match state.tsret.get_text(&node.child(1).expect("")) {
         ";" => state.break_label.expect("Loop was not labeled!"),
@@ -161,6 +348,85 @@ fn labeled_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
         node.child(2).expect("labeled statement lacks child!"),
         &res, state
     )
+}
+
+/* ------------ CONDITIONALS --------------- */
+fn switch_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
+    let switch_label = state.pop_label().unwrap_or(state.sm.fresh("_switch_"));
+    state.continue_label = Some(switch_label);
+    state.break_label = Some(switch_label);
+
+    let arg = expression(state.tsret.get_field(&node, "condition"), state);
+    let mut cases: Vec<(Vec<Operand>, Box<Tree>)> = Vec::new();
+    let mut cur_args: Vec<Operand> = Vec::new();
+    let mut default: Option<Box<Tree>> = None;
+    let block = state.tsret.get_field(&node, "body");
+    let mut cursor = block.walk();
+    cursor.goto_first_child();
+    while cursor.goto_next_sibling() {
+        let node = cursor.node();
+        // The parser is a little janky in that it specifies
+        // That labels can occur multiple times in a block AND
+        // Blocks can occur multiple times, creating ambiguity.
+        // This handles both cases, even though it usualy just does the former.
+
+        match node.kind() {
+            "switch_block_statement_group" => {
+                let (ops, tree) = switch_block_statement_group(node, state);
+                if ops.len() != 0 {
+                    cur_args.extend(ops);
+                    if let Some(t) = tree {
+                        cases.push((cur_args.clone(), t));
+                        cur_args.clear();
+                    }; 
+                } else {
+                    default = Some(tree.expect("Default case doesn't exist!"))
+                }
+            },
+            "switch_rule" => panic!("switch_rule is unsupported"),
+            _ => break
+        }
+    }
+
+    let res = Box::new(Tree::Switch(SwitchStatement {
+        arg,
+        label: switch_label, // TODO
+        cases: cases,
+        default: default,
+        body: Box::new(Tree::LetCont(ContDeclaration {
+            name: switch_label,
+            body: next(node, tail, state)
+        }))
+    }));
+    state.continue_label = None;
+    state.break_label = None;
+    res
+}
+
+fn switch_block_statement_group(node: Node, state: &mut State) -> (Vec<Operand>, Option<Box<Tree>>) {
+    let mut ops: Vec<Operand> = Vec::new();
+    let mut cur = node.walk();
+    cur.goto_first_child();
+    loop {
+        let child = cur.node();
+        match child.kind() {
+            "switch_label" => switch_label(child, state).map(|e| ops.push(e)),
+            _ => break
+        };
+        if !cur.goto_next_sibling() { return (ops, None) }
+        if !cur.goto_next_sibling() { return (ops, None) }
+    }
+    let tail = |_: &mut State| { Box::new(Tree::Terminal) };
+    (ops, Some(statement(cur.node(), &tail, state)))
+}
+
+fn switch_label(node: Node, state: &mut State) -> Option<Operand> {
+    let child = node.child(0).expect("Empty Switch Label!");
+    match state.tsret.get_text(&child) {
+        "case" => Some(expression(node.child(1).expect("Empty Case!"), state)),
+        "default" => None,
+        _ => panic!("Unknown switch label!")
+    }
 }
 
 fn if_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
@@ -322,7 +588,7 @@ fn assert_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
 }
 
 fn local_variable_declaration(node: Node, tail: TailTp, state: &mut State, one: bool) -> Box<Tree> {
-    let tp = state.tsret.get_typ(&node);
+    let tp = state.get_typ(&node);
     let mut cur = node.named_child(1).expect("Declaration has 0 declarators!");
     let mut syms = Vec::new();
     let mut exps = Vec::new();
@@ -330,10 +596,11 @@ fn local_variable_declaration(node: Node, tail: TailTp, state: &mut State, one: 
         let name_str = state.tsret.get_field_text(&cur, "name");
         let name_sym = state.sm.fresh(name_str);
         let value = cur.child_by_field_name("value");
-        let exp = value.map(|x| Operand::C(state.tsret.get_lit(&x)));
+        let exp = value.map(|x| expression(x, state));
         syms.push(name_sym);
         exps.push(exp);
-        state.scope.insert(name_str, name_sym);
+        state.var_scope.insert(name_str, name_sym);
+        state.type_map.insert(name_sym, tp);
         if let Some(nbr) = cur.next_named_sibling() {
             cur = nbr;
             continue;
@@ -346,7 +613,7 @@ fn local_variable_declaration(node: Node, tail: TailTp, state: &mut State, one: 
         res = Box::new(Tree::LetP(PrimStatement {
             name: syms[i],
             label: state.pop_label(),
-            typ: tp.clone(),
+            typ: tp,
             exp: exps.remove(i),
             body: res
         }));
@@ -354,272 +621,153 @@ fn local_variable_declaration(node: Node, tail: TailTp, state: &mut State, one: 
     res
 }
 
-fn import_declaration(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
-    let path = state.tsret.get_text(&node.named_child(0).expect("Invalid Import"));
-    return Box::new(Tree::LetI(ImportDeclaration {
-        path: path.to_string(),
-        body: next(node, tail, state)
-    }));
-}
-
-fn enum_declaration(node: Node, state: &mut State) -> Box<Tree> {
-    todo!()
-}
-
-fn class_declaration(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
-    let cname = state.tsret.get_field_text(&node, "name");
-    let csym = state.sm.fresh(cname);
-
-    let mut superclass = None;
-    if let Some(sc) = node.child_by_field_name("superclass") {
-        let pname = state.tsret.get_text(
-            &sc.child(1).expect("Superclass should have child.")
-        );
-        if let Some(sym) = state.scope.find(pname) {
-            superclass = Some(sym);
-        } else {
-            superclass = Some(state.sm.fresh(pname));
-        }
-    }
-
-    let mut members = Vec::new();
-    let mut methods = LinkedList::new();
-    if let Some(body) = node.child_by_field_name("body") {
-        state.scope.scope_in();
-        let mut bcursor = body.walk();
-        for child in body.named_children(&mut bcursor) {
-            match child.kind() {
-                "method_declaration" => methods.push_back(method_declaration(child, state)),
-                "field_declaration" => members.push(parse_field(child, state)),
-                other => panic!("Parse Tree uses unknown node {}\n", other)
-            }
-        }
-        state.scope.scope_out();
-    }
-    
-    let cname = state.tsret.get_field_text(&node, "name");
-    return Box::new(Tree::LetC(ClassDeclaration {
-        name: csym,
-        members,
-        methods,
-        extends: superclass,
-        body: next(node, tail, state)
-    }));
-}
-
-fn parse_field(node: Node, state: &mut State) -> (Symbol, Typ) {
-    let typ = state.tsret.get_typ(&node);
-    let declarator = state.tsret.get_field(&node, "declarator");
-    let name = state.tsret.get_field_text(&declarator, "name");
-    (state.sm.fresh(name), typ)
-}
-
-fn switch_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
-    let switch_label = state.pop_label().unwrap_or(state.sm.fresh("_switch_"));
-    state.continue_label = Some(switch_label);
-    state.break_label = Some(switch_label);
-
-    let arg = expression(state.tsret.get_field(&node, "condition"), state);
-    let mut cases: Vec<(Vec<Operand>, Box<Tree>)> = Vec::new();
-    let mut cur_args: Vec<Operand> = Vec::new();
-    let mut default: Option<Box<Tree>> = None;
-    let block = state.tsret.get_field(&node, "body");
-    let mut cursor = block.walk();
-    cursor.goto_first_child();
-    while cursor.goto_next_sibling() {
-        let node = cursor.node();
-        // The parser is a little janky in that it specifies
-        // That labels can occur multiple times in a block AND
-        // Blocks can occur multiple times, creating ambiguity.
-        // This handles both cases, even though it usualy just does the former.
-
-        match node.kind() {
-            "switch_block_statement_group" => {
-                let (ops, tree) = switch_block_statement_group(node, state);
-                if ops.len() != 0 {
-                    cur_args.extend(ops);
-                    if let Some(t) = tree {
-                        cases.push((cur_args.clone(), t));
-                        cur_args.clear();
-                    }; 
-                } else {
-                    default = Some(tree.expect("Default case doesn't exist!"))
-                }
-            },
-            "switch_rule" => panic!("switch_rule is unsupported"),
-            _ => break
-        }
-    }
-
-    let res = Box::new(Tree::Switch(SwitchStatement {
-        arg,
-        label: switch_label, // TODO
-        cases: cases,
-        default: default,
-        body: Box::new(Tree::LetCont(ContDeclaration {
-            name: switch_label,
-            body: next(node, tail, state)
-        }))
-    }));
-    state.continue_label = None;
-    state.break_label = None;
-    res
-}
-
-fn switch_block_statement_group(node: Node, state: &mut State) -> (Vec<Operand>, Option<Box<Tree>>) {
-    let mut ops: Vec<Operand> = Vec::new();
-    let mut cur = node.walk();
-    cur.goto_first_child();
-    loop {
-        let child = cur.node();
-        match child.kind() {
-            "switch_label" => switch_label(child, state).map(|e| ops.push(e)),
-            _ => break
-        };
-        if !cur.goto_next_sibling() { return (ops, None) }
-        if !cur.goto_next_sibling() { return (ops, None) }
-    }
-    let tail = |_: &mut State| { Box::new(Tree::Terminal) };
-    (ops, Some(statement(cur.node(), &tail, state)))
-}
-
-fn switch_label(node: Node, state: &mut State) -> Option<Operand> {
-    let child = node.child(0).expect("Empty Switch Label!");
-    match state.tsret.get_text(&child) {
-        "case" => Some(expression(node.child(1).expect("Empty Case!"), state)),
-        "default" => None,
-        _ => panic!("Unknown switch label!")
-    }
-}
-
-fn method_declaration(node: Node, state: &mut State) -> Box<Tree> {
-    let rtyp = state.tsret.get_typ(&node);
-    let name = state.tsret.get_field_text(&node, "name");
-    let name_sym = state.sm.fresh(name);
-
-    let mut modifiers = Vec::new();
-    let mods = node.named_child(0).expect("Method has 0 children.");
-    if mods.kind() == "modifiers" {
-        let mut cursor = mods.walk();
-        for child in mods.children(&mut cursor) {
-            modifiers.push(state.tsret.get_text(&child).to_string());
-        }
-    }
-
-    let mut throws: Vec<String> = Vec::new();
-    let child_count = node.child_count();
-    if let Some(c) = node.child(child_count - 2) {
-        if c.kind() == "throws" {
-            let mut cursor = c.walk();
-            cursor.goto_first_child();
-            while cursor.goto_next_sibling() {
-                throws.push(state.tsret.get_text(&cursor.node()).to_string())
-            }
-        }
-    }
-
-    let mut args = Vec::new();
-    if let Some(params) = node.child_by_field_name("parameters") {
-        let mut cursor = params.walk();
-        for child in params.named_children(&mut cursor) {
-            let argname = state.tsret.get_field_text(&child, "name");
-            let argsym = state.sm.fresh(argname);
-            args.push((argsym, state.tsret.get_typ(&node)));
-            state.scope.insert(argname, argsym);
-        }
-    }
-    
-    let tail = |_: &mut State| { Box::new(Tree::Return(ReturnStatement { val: None } )) };
-    let body = node.child_by_field_name("body").map(|x| block(x, &tail, state));
-    Box::new(Tree::LetF(FunDeclaration {
-        name: name_sym,
-        return_typ: rtyp,
-        args,
-        throws,
-        modifiers,
-        body
-    }))
-}
-
-// TODO: add in custom blocks.
+// TODO: Add support for blocks that aren't attached to a function.
 fn block(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
-    state.scope.scope_in();
+    state.scope_in();
     let res = if let Some(child) = node.named_child(0) {
         // let child_tail = |s: &mut State| { next(node, tail, s) };
         statement(child, tail, state)
     } else {
         todo!()
     };
-    state.scope.scope_out();
+    state.scope_out();
     res
 }
 
 fn expression(node: Node, state: &mut State) -> Operand {
+    let (op, _) = type_expression(node, state);
+    op
+}
+
+fn type_coerce(a: Option<Typ>, b: Option<Typ>) -> Option<Typ> {
+    match (a, b) {
+        (Some(at), Some(bt)) if at == bt => Some(at),
+        _ => None
+    }
+}
+
+fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
     use Operand as O;
     match node.kind() {
         "assignment_expression" => binary_expression(node, state),
         "binary_expression" => binary_expression(node, state),
-        "instanceof_expression" => todo!(),
-        "lambda_expression" => todo!(),
-        "ternary_expression" => Operand::T(ExprTree {
-            op: Operation::Ternary,
-            args: vec![expression(state.tsret.get_field(&node, "condition"), state),
-                        expression(state.tsret.get_field(&node, "consequence"), state),
-                        expression(state.tsret.get_field(&node, "alternative"), state)]
-        }),
+        "instanceof_expression" => panic!("instanceof is not supported yet!"),
+        "lambda_expression" => panic!("lambdas are not supported!"),
+        "ternary_expression" => {
+            let (cond, cond_typ) = type_expression(state.tsret.get_field(&node, "condition"), state);
+            let (cons, cons_typ) = type_expression(state.tsret.get_field(&node, "consequence"), state);
+            let (alt, alt_typ) = type_expression(state.tsret.get_field(&node, "alternative"), state);
+            let tree = Operand::T(ExprTree { op: Operation::Ternary, args: vec![cond, cons, alt] });
+            (tree, type_coerce(cons_typ, alt_typ))
+        },
         "update_expression" => {
             use Operand::*;
             use Operation::*;
-            match node.child(0).expect("Update Expression Has Child").kind() {
-                "++" => return T(ExprTree { op: PreInc, args: vec![expression(node.child(1).expect(""), state)] }),
-                "--" => return T(ExprTree { op: PreDec, args: vec![expression(node.child(1).expect(""), state)] }),
-                _ => ()
-            }
-            match node.child(1).expect("Update Expression Has Child").kind() {
-                "++" => return T(ExprTree { op: PreInc, args: vec![expression(node.child(0).expect(""), state)] }),
-                "--" => return T(ExprTree { op: PreDec, args: vec![expression(node.child(0).expect(""), state)] }),
-                _ => panic!("Unknown Updated Expression!")
-            }
+            let (op, idx) = match node.child(0).expect("Update Expression Has Child").kind() {
+                "++" => (PostInc, 1),
+                "--" => (PostDec, 1),
+                _ => match node.child(1).expect("Update Expression Has Child").kind() {
+                    "++" => (PreInc, 0),
+                    "--" => (PreDec, 0),
+                    _ => panic!("Unknown Updated Expression!")
+                }
+            };
+            let (exp, etyp) = type_expression(node.child(idx).expect(""), state);
+            return (T(ExprTree { op, args: vec![exp] }), etyp);
         },
-        "cast_expression" => todo!(),
-        "unary_expression" => Operand::T(ExprTree {
-            op: state.tsret.get_op(&node),
-            args: vec![expression(state.tsret.get_field(&node, "operand"), state)]
-        }),
+        "cast_expression" => panic!("casts are not supported yet!"),
+        "unary_expression" => {
+            let (exp, etyp) = type_expression(state.tsret.get_field(&node, "operand"), state);
+            (Operand::T(ExprTree { op: state.tsret.get_op(&node), args: vec![exp] }), etyp)
+        },
         "switch_expression" => panic!("Switches are not supported as expressions!"),
 
         //------- PRIMARY EXPRESSIONS ---------//
 
         // _literal
-        "decimal_integer_literal" | "hex_integer_literal" | "octal_integer_literal" |
-        "binary_integer_literal" | "decimal_floating_point_literal" | "hex_floating_point_literal" |
-        "true" | "false" | "character_literal" | "string_literal" | "null_literal" =>
-            O::C(state.tsret.get_lit(&node)),
+        "character_literal" => (O::C(state.tsret.get_lit(&node)), Some(Typ::Char)),
+        "true" | "false" => (O::C(state.tsret.get_lit(&node)), Some(Typ::Bool)),
+        "decimal_integer_literal" | "hex_integer_literal" |
+        "octal_integer_literal" | "binary_integer_literal" => (O::C(state.tsret.get_lit(&node)), Some(Typ::Long)),
+        "decimal_floating_point_literal" | "hex_floating_point_literal" => (O::C(state.tsret.get_lit(&node)), Some(Typ::Double)),
+        "string_literal" => (O::C(state.tsret.get_lit(&node)), Some(Typ::Str)),
+        "null_literal" => (O::C(state.tsret.get_lit(&node)), None),
 
-        "class_literal" => panic!("Class Literals are not supported!"),
-        "this" => O::This,
+        "class_literal" => panic!("Class Literals are not (yet) supported!"),
+        "this" => (O::This, Some(Typ::Class(state.class_sym.expect("Current Class not set!")))),
+        "super" => {
+            let parent = state.directory.resolve_parent(state.class_sym.expect("Current Class not set!"));
+            (O::Super, Some(Typ::Class(parent.expect("Invalid use of super"))))
+        }
         "identifier" => {
+            // Not actually sure if I should be allowing classes here...
             let iname = state.tsret.get_text(&node);
-            O::V(state.scope.find(iname).expect(
-                &format!("Identifier {} not found", iname)))
+            let isym = state.var_scope.find(iname).unwrap_or_else(||
+                state.class_scope.find(iname).unwrap_or_else(||
+                    state.sm.fresh_unknown(iname)
+                )
+            );
+            (O::V(isym), state.type_map.get(&isym).copied())
         }
 
-        "parenthesized_expression" => expression(node.child(1).expect("parenthesized_expression"), state),
-        "object_creation_expression" => todo!(),
-        "field_access" => O::T(ExprTree {
-            op: Operation::Access,
-            args: vec![expression(state.tsret.get_field(&node, "object"), state),
-                        expression(state.tsret.get_field(&node, "field"), state)]
-        }),
-        "array_access" => O::T(ExprTree {
-            op: Operation::Index,
-            args: vec![expression(state.tsret.get_field(&node, "array"), state),
-                        expression(state.tsret.get_field(&node, "index"), state)]
-        }),
-        "method_invocation" => todo!(),
-        "method_reference" => todo!(),
+        "parenthesized_expression" => type_expression(node.child(1).expect("parenthesized_expression"), state),
+        "object_creation_expression" => {
+            let dne = || panic!("Object child node does not exist");
+            node.child(0).map(|x| x.kind() == "new").map_or_else(dne,
+                |result| { if !result { panic!("Unsupported Object Creation Expression!"); }
+            });
+            node.child(1).map(|x| x.kind() == "@").map_or_else(dne,
+                |result| { if result { panic!("Annotations are not supported!"); }
+            });
+            let nchild = node.child_count();
+            node.child(nchild - 1).map(|x| x.kind() == "class_body").map_or_else(dne,
+                |result| { if result { panic!("Inline classes are not supported!"); }
+            });
+            let obj = state.tsret.get_field_text(&node, "type");
+            let csym = state.class_scope.find(obj).expect("new is not used on a class!");
+            let mut args = vec![O::V(csym)];
+            args.extend(parse_args(node.child_by_field_name("arguments").expect("Missing argument list."), state));
+            (O::T(ExprTree { op: Operation::New, args }), Some(Typ::Class(csym)))
+        },
+        "field_access" => {
+            let (obj, obj_typ) = type_expression(state.tsret.get_field(&node, "object"), state);
+            let fname = state.tsret.get_field_text(&node, "field");
+            let fsym = obj_typ.and_then(|x| {
+                if let Typ::Class(csym) = x {
+                    state.directory.resolve_field(csym, fname).copied()
+                } else { 
+                    None
+                }
+            }).unwrap_or_else(|| state.sm.fresh_unknown(fname));
+            let tree = O::T(ExprTree { op: Operation::Access, args: vec![obj, Operand::V(fsym)] });
+            (tree, state.type_map.get(&fsym).copied())
+        },
+        "array_access" => {
+            // Once we flush out array types, then we'll have an accessor we can use to grab the access type.
+            let (arr, arr_type) = type_expression(state.tsret.get_field(&node, "array"), state);
+            let index = expression(state.tsret.get_field(&node, "index"), state);
+            (O::T(ExprTree { op: Operation::Index, args: vec![arr, index] }), todo!())
+        },
+        "method_invocation" => {
+            node.child_by_field_name("type_arguments").map(|_| panic!("Templates not supported!"));
+            // TODO: this is bad, it's a basic feature and you will need this for inlining extended classes.
+            node.child(2).map(|x| if x.kind() == "super" { panic!("Super not supported in invocation (yet)!") });
+            let (obj, obj_type) = type_expression(node.child_by_field_name("object").expect(""), state);
+            let fname = state.tsret.get_field_text(&node, "name");
+            let fsym = obj_type.and_then(|x| {
+                if let Typ::Class(csym) = x {
+                    state.directory.resolve_field(csym, fname).copied()
+                } else { 
+                    None
+                }
+            }).unwrap_or_else(|| state.sm.fresh_unknown(fname));
+            let mut args = vec![obj, Operand::V(fsym)];
+            args.extend(parse_args(node.child_by_field_name("arguments").expect("method lacks args"), state));
+            (O::T(ExprTree { op: Operation::Call, args }), state.type_map.get(&fsym).copied())
+        },
+        "method_reference" => panic!("Method references are not supported!"),
         "array_creation_expression" => todo!(),
-        "template_expression" => todo!(),
+        "template_expression" => panic!("Template expressions are not supported yet."),
 
         // _reserved_identifier
         "open" | "module" | "record" | "with" | "yield" | "seal" => panic!("Reserved Identifiers are not supported!"),
@@ -627,66 +775,20 @@ fn expression(node: Node, state: &mut State) -> Operand {
     }
 }
 
-fn binary_expression(node: Node, state: &mut State) -> Operand {
-    Operand::T(ExprTree {
-        op: state.tsret.get_op(&node),
-        args: vec![
-            expression(state.tsret.get_field(&node, "left"), state),
-            expression(state.tsret.get_field(&node, "right"), state)
-        ]
-    })
+fn parse_args(node: Node, state: &mut State) -> Vec<Operand> {
+    let mut res = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        res.push(expression(child, state))
+    }
+    res
 }
 
-
-#[cfg(test)]
-mod tests {
-    use tree_sitter::Parser;
-    use crate::printer::Printer;
-    use super::*;
-
-    #[test]
-    fn tinker() {
-        let code = r#"
-        import java.util.Scanner;
-        class Test extends Object {
-            int y;
-            static int thing(int x, int z) throws Exception {
-                int a, b, c = 3;
-                label: a += 2;
-                switch (x) {
-                    case 0:
-                    case 1: return 2;
-                    case 2: break;
-                    case 3: return a;
-                    case 4: return 3;
-                    default: return 2;
-                }
-                if (x < 2) {
-                    return 3;
-                } else {
-                    return 2;
-                }
-                for (int i = 0; i < 10; i++) {
-                    i += 1;
-                }
-                
-                int w = 0;
-                do {
-                    w = 2;
-                } while (w < 3);
-                return x * 2;
-            }
-        }
-        "#;
-
-        let mut parser = Parser::new();
-        parser.set_language(&tree_sitter_java::language()).expect("Error loading Java grammar");
-        let tree = parser.parse(code, None).unwrap();
-        let mut sm = SymbolMaker::new();
-        println!("{}", tree.root_node());
-        let ast = convert(tree.root_node(), code.as_bytes(), &mut sm);
-        let mut printer = Printer::new(&sm);
-        printer.print_tree(&ast);
-        assert!(false);
-    }
+// It's ok to be a bit convervative with evaluating types.
+// In the worst case, it merely inhibits us from performing some inlining.
+fn binary_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
+    let (left, ltyp) = type_expression(state.tsret.get_field(&node, "left"), state);
+    let (right, rtyp) = type_expression(state.tsret.get_field(&node, "right"), state);
+    let tree = ExprTree { op: state.tsret.get_op(&node), args: vec![left, right] };
+    (Operand::T(tree), type_coerce(ltyp, rtyp))
 }
