@@ -162,8 +162,10 @@ fn print_tree(tree: &Tree, state: &mut dyn PrintState) {
                 serialize_op(cond, state))
             );
             scope!({ print_tree(btrue, state) });
-            state.println("} else {");
-            scope!({ bfalse.as_ref().map(|x| print_tree(x, state)) });
+            if bfalse.is_some() {
+                state.println("} else {");
+                scope!({ bfalse.as_ref().map(|x| print_tree(x, state)) });
+            }
             state.println("}");
             print_tree(body, state);
         },
@@ -179,11 +181,10 @@ fn print_tree(tree: &Tree, state: &mut dyn PrintState) {
             &format!("// {}();", state.uname(*sym))
         ),
         Tree::Block(BlockStatement { label, bbody, body }) => {
-            let mut buf = "".to_owned();
-            label.map(|l| buf += &format!("{}: ", state.uname(l)));
+            let mut buf = format!("{}: ", state.uname(*label));
             buf += "{";
             state.println(&buf);
-            scope!({ print_tree(&bbody, state) });
+            scope!({ bbody.as_ref().map(|b| print_tree(b.as_ref(), state))});
             state.println("}");
             print_tree(body, state);
         },
@@ -223,7 +224,7 @@ fn serialize_op(op: &Operand, state: &dyn PrintState) -> String {
                     serialize_operator(*op),
                     serialize_op(&args[0], state),
                 ),
-                PostInc | PostDec if args.len() == 1 => format!("{}({})",
+                PostInc | PostDec if args.len() == 1 => format!("({}){}",
                     serialize_op(&args[0], state),
                     serialize_operator(*op),
                 ),
@@ -294,7 +295,7 @@ fn serialize_operator(operator: Operation) -> &'static str {
         ShrSet => ">>=",
         UshrSet => ">>>=",
         ShlSet => "<<=",
-        Eq => "=",
+        Eq => "==",
         Neq => "!=",
         G => ">",
         L => "<",
@@ -355,6 +356,11 @@ fn serialize_tp(tp: &Typ, state: &dyn PrintState) -> Cow<'static, str> {
         T::Float => B("float"),
         T::Double => B("double"),
         T::Str => B("String"),
+        T::Array(ArrayTyp { eltype, len, dims }) =>  O(format!("{}[{}]{}",
+            serialize_tp(eltype, state),
+            if let Some(l) = len { l.to_string() } else { "".to_string() },
+            "[]".repeat((dims - 1) as usize)
+        )),
         T::Class(s) => O(state.uname(*s))
     }
 }

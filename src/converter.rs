@@ -12,8 +12,6 @@ use tree_sitter::Node;
 type TailTp<'l> = &'l dyn Fn(&mut State) -> Box<Tree>;
 
 struct State<'l> {
-    entry_name: &'l str,
-    entry_sym: Option<Symbol>,
     class_sym: Option<Symbol>,
     var_scope: Scope<'l>,
     class_scope: Scope<'l>,
@@ -30,8 +28,6 @@ struct State<'l> {
 impl<'l> State<'l> {
     pub fn new(source: &'l [u8], sm: &'l mut SymbolMaker) -> Self {
         Self {
-            entry_name: "Main",
-            entry_sym: None,
             class_sym: None,
             var_scope: Scope::new(),
             class_scope: Scope::new(),
@@ -42,7 +38,7 @@ impl<'l> State<'l> {
             break_label: None,
             continue_label: None,
             label: None,
-            sm,
+            sm
         }
     }
 
@@ -61,16 +57,39 @@ impl<'l> State<'l> {
     }
 
     pub fn get_typ(&self, node: &Node) -> Typ {
-        match self.tsret.get_field_text(node, "type") {
-            "void" => Typ::Void,
-            "byte" => Typ::Byte,
-            "short" => Typ::Short,
-            "int" => Typ::Int,
-            "long" => Typ::Long,
-            "char" => Typ::Char,
-            "float" => Typ::Float,
-            "double" => Typ::Double,
-            "boolean" => Typ::Bool,
+        let typ_node = self.tsret.get_field(node, "type");
+        self.get_typ_raw(&typ_node)
+    }
+
+    pub fn get_typ_raw(&self, typ_node: &Node) -> Typ {
+        match typ_node.kind() {
+            "void_type" => Typ::Void,
+            "integral_type" => match self.tsret.get_text(&typ_node) {
+                "byte" => Typ::Byte,
+                "short" => Typ::Short,
+                "int" => Typ::Int,
+                "long" => Typ::Long,
+                "char" => Typ::Char,
+                other => panic!("integral_type: {}", other)
+            }
+            "boolean_type" => Typ::Bool,
+            "floating_point_type" => match self.tsret.get_text(&typ_node) {
+                "float" => Typ::Float,
+                "double" => Typ::Double,
+                other => panic!("floating_point_type: {}", other)
+            }
+
+            // "array_type" => {
+            //     let eltyp = self.get_typ_raw(&self.tsret.get_field(&typ_node, "element"));
+            //     todo!()
+            // },
+
+            // Temporary hack.
+            "array_type" => Typ::Array(ArrayTyp {
+                eltype: Box::new(Typ::Str),
+                len: None,
+                dims: 1
+            }),
             other => Typ::Class(self.class_scope
                 .find(other)
                 .expect(&format!("Unknown Class Type {}", other))
@@ -92,18 +111,19 @@ impl<'l> State<'l> {
 pub fn convert(root: Node, source: &[u8], sm: &mut SymbolMaker) -> Box<Tree> {
     assert!(root.kind() == "program");
     let mut state = State::new(source, sm);
-    add_declarations(root, &mut state);
-    let res = |s: &mut State| Box::new(Tree::EntryPoint(s.sm.fresh("Main")));
-    statement(root.child(0).expect("Empty Program!"), &res, &mut state)
+    let entry_sym = add_declarations(root, &mut state, "main");
+    let res = |s: &mut State| Box::new(Tree::EntryPoint(entry_sym));
+    statement(root.child(0).expect("Empty Program!"), &res, &mut state, true)
 }
 
 // TODO: support for enums!
-fn add_declarations(root: Node, state: &mut State) {
+fn add_declarations<'l>(root: Node, state: &mut State, entry_name: &'l str) -> Symbol {
+    let mut entry_sym = None;
     let mut cursor = root.walk();
     for top in root.named_children(&mut cursor) {
         if top.kind() != "class_declaration" { continue }
         let cname = state.tsret.get_field_text(&top, "name");
-        let csym = state.sm.fresh(cname);
+        let csym = state.sm.fresh_reserved(cname);
         state.class_scope.insert(cname, csym);
 
         let mut methods = HashMap::new();
@@ -116,8 +136,13 @@ fn add_declarations(root: Node, state: &mut State) {
                 "enum_declaration" => panic!("Inner enums are not supported!"),
                 "method_declaration" => {
                     let fname = state.tsret.get_field_text(&child, "name");
-                    let fsym = state.sm.fresh(fname);
-                    println!("class: {}, fun: {}", cname, fname);
+                    let fsym = if fname == entry_name {
+                        let res = state.sm.fresh_reserved(fname);
+                        entry_sym = Some(res);
+                        res
+                    } else {
+                        state.sm.fresh(fname)
+                    };
                     let rtyp = state.get_typ(&child);
                     state.type_map.insert(fsym, rtyp);
                     methods.insert(fname, fsym);
@@ -135,41 +160,42 @@ fn add_declarations(root: Node, state: &mut State) {
         }
         state.directory.add_class(csym, methods, members);
     }
+    entry_sym.expect("The entry symbol was not found!")
 }
 
 /* ------ STATEMENTS ------ */
-fn statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
+fn statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Box<Tree> {
     match node.kind() {
         /* ------ TOP-LEVEL DECLARATIONS -------- */
         "module_declaration" => panic!("Modules are not supported!"),
-        "package_declaration" => next(node, tail, state), /* packages are inlined */
-        "import_declaration" => import_declaration(node, tail, state),
-        "class_declaration" => class_declaration(node, tail, state),
+        "package_declaration" => next(node, tail, state, repeat), /* packages are inlined */
+        "import_declaration" => import_declaration(node, tail, state, repeat),
+        "class_declaration" => class_declaration(node, tail, state, repeat),
         "record_declaration" => panic!("Records are not supported!"),
-        "interface_declaration" => { println!("Warning: Interfaces are ignored!"); next(node, tail, state) },
+        "interface_declaration" => next(node, tail, state, repeat),
         "annotation_type_declaration" => panic!("Annotations are not supported!"),
         "enum_declaration" => enum_declaration(node, state),
 
         /* ------ Method Statements ----------- */
-        "expression_statement" => expression_statement(node, tail, state),
-        "labeled_statement" => labeled_statement(node, tail, state),
-        "if_statement" => if_statement(node, tail, state),
-        "while_statement" => while_statement(node, tail, state),
-        "for_statement" => for_statement(node, tail, state),
+        "expression_statement" => expression_statement(node, tail, state, repeat),
+        "labeled_statement" => labeled_statement(node, tail, state, repeat),
+        "if_statement" => if_statement(node, tail, state, repeat),
+        "while_statement" => while_statement(node, tail, state, repeat),
+        "for_statement" => for_statement(node, tail, state, repeat),
         "enhanced_for_statement" => todo!(),
-        "block" => block(node, tail, state),
-        ";" => next(node, tail, state),
-        "assert_statement" => assert_statement(node, tail, state),
-        "do_statement" => do_statement(node, tail, state),
-        "break_statement" => break_statement(node, tail, state),
-        "continue_statement" => continue_statement(node, tail, state),
+        "block" => block(node, tail, state, repeat),
+        ";" => next(node, tail, state, repeat),
+        "assert_statement" => assert_statement(node, tail, state, repeat),
+        "do_statement" => do_statement(node, tail, state, repeat),
+        "break_statement" => break_statement(node, tail, state, repeat),
+        "continue_statement" => continue_statement(node, tail, state, repeat),
         "return_statement" => Box::new(Tree::Return(ReturnStatement { 
             val: node.named_child(0).map(|child| expression(child, state))
         })),
         "yield_statement" => panic!("Yield is unsupported!"),
-        "switch_expression" => switch_statement(node, tail, state),
+        "switch_expression" => switch_statement(node, tail, state, repeat),
         "synchronized_statement" => panic!("Synchronized is unsupported!"),
-        "local_variable_declaration" => local_variable_declaration(node, tail, state, false),
+        "local_variable_declaration" => local_variable_declaration(node, tail, state, repeat),
         "throw_statement" => Box::new(Tree::LetP(PrimStatement { 
             name: state.sm.fresh("temp"),
             typ: Typ::Void,
@@ -178,12 +204,12 @@ fn statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
                 op: Operation::Throw,
                 args: vec![expression(node.child(1).expect(""), state)]
             })),
-            body: next(node, tail, state)
+            body: next(node, tail, state, repeat)
         })),
         "try_statement" => todo!(),
         "try_with_resources_statement" => todo!(),
-        "line_comment" => next(node, tail, state),
-        "block_comment" => next(node, tail, state),
+        "line_comment" => next(node, tail, state, repeat),
+        "block_comment" => next(node, tail, state, repeat),
         other => panic!("Unsupported statement {}!", other)
     }
 }
@@ -191,31 +217,32 @@ fn statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
 /*
  * Grabs the next statement, if there is no next statement, tail is inserted.
  */
-fn next(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
+fn next(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Box<Tree> {
+    if !repeat { return tail(state) }
     if let Some(sib) = node.next_named_sibling() {
-        statement(sib, tail, state)
+        statement(sib, tail, state, true)
     } else {
         tail(state)
     }
 }
 
 /* ------------ DECLARATIONS ------------ */
-fn import_declaration(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
+fn import_declaration(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Box<Tree> {
     let path = state.tsret.get_text(&node.named_child(0).expect("Invalid Import"));
     node.child(1).map(|x| if x.kind() == "static" { panic!("Static imports are not yet supported.") } );
     return Box::new(Tree::LetI(ImportDeclaration {
         path: path.to_string(),
-        body: next(node, tail, state)
+        body: next(node, tail, state, repeat)
     }));
 }
 
-fn class_declaration(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
+fn class_declaration(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Box<Tree> {
     let cname = state.tsret.get_field_text(&node, "name");
     let csym = state.class_scope.find(cname).expect("Class Symbol was not inserted!");
     let superclass = node.child_by_field_name("superclass").map(|sc| {
         let pname = state.tsret.get_text(&sc.child(1).expect("Missing Super."));
         if let Some(sym) = state.class_scope.find(pname) { sym }
-        else { state.sm.fresh_unknown(pname) }
+        else { state.sm.fresh_reserved(pname) }
     });
 
     // Note that we do this here, because in the first pass it's unclear whether the parent
@@ -224,7 +251,7 @@ fn class_declaration(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
     let members = state.directory.members(csym)
         .expect("class symbol was not inserted!")
         .iter()
-        .map(|x| (*x, *state.type_map.get(x).expect("")))
+        .map(|x| (*x, state.type_map.get(x).expect("").clone()))
         .collect::<Vec<(Symbol, Typ)>>();
     let mut methods = LinkedList::new();
     if let Some(body) = node.child_by_field_name("body") {
@@ -251,7 +278,7 @@ fn class_declaration(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
         members,
         methods,
         extends: superclass,
-        body: next(node, tail, state)
+        body: next(node, tail, state, repeat)
     }));
 }
 
@@ -261,7 +288,7 @@ fn enum_declaration(node: Node, state: &mut State) -> Box<Tree> {
 }
 
 fn method_declaration(node: Node, state: &mut State, name: Symbol) -> Box<Tree> {
-    let rtyp = *state.type_map.get(&name).expect("Funtype was not inserted!");
+    let rtyp = state.type_map.get(&name).expect("Funtype was not inserted!").clone();
     let mut modifiers = Vec::new();
     let mods = node.named_child(0).expect("Method has 0 children.");
     // All we really care about is whether the method is static.
@@ -290,13 +317,13 @@ fn method_declaration(node: Node, state: &mut State, name: Symbol) -> Box<Tree> 
         for child in params.named_children(&mut cursor) {
             let argname = state.tsret.get_field_text(&child, "name");
             let argsym = state.sm.fresh(argname);
-            args.push((argsym, state.get_typ(&node)));
+            args.push((argsym, state.get_typ(&child)));
             state.var_scope.insert(argname, argsym);
         }
     }
     
     let tail = |_: &mut State| { Box::new(Tree::Return(ReturnStatement { val: None } )) };
-    let body = node.child_by_field_name("body").map(|x| block(x, &tail, state));
+    let body = node.child_by_field_name("body").and_then(|x| inline_block(x, &tail, state));
     Box::new(Tree::LetF(FunDeclaration {
         name,
         return_typ: rtyp,
@@ -307,32 +334,32 @@ fn method_declaration(node: Node, state: &mut State, name: Symbol) -> Box<Tree> 
     }))
 }
 
-fn break_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
+fn break_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Box<Tree> {
     Box::new(Tree::Break(match state.tsret.get_text(&node.child(1).expect("")) {
         ";" => state.break_label.expect("Loop was not labeled!"),
         ident => state.find_label(ident).expect("Unknown label")
     }))
 }
 
-fn continue_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
+fn continue_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Box<Tree> {
     Box::new(Tree::Continue(match state.tsret.get_text(&node.child(1).expect("")) {
         ";" => state.continue_label.expect("Loop was not labeled!"),
         ident => state.find_label(ident).expect("Unknown label")
     }))
 }
 
-fn expression_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
+fn expression_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Box<Tree> {
     let label = state.pop_label();
     Box::new(Tree::LetP(PrimStatement {
         name: state.sm.fresh("expr_stmt"),
         typ: Typ::Void,
         exp: Some(expression(node.child(0).expect("Expression is non-null"), state)),
-        body: next(node, tail, state),
+        body: next(node, tail, state, repeat),
         label
     }))
 }
 
-fn labeled_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
+fn labeled_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Box<Tree> {
     let label_str = state.tsret.get_text(&node.child(0).expect("Label does not exist!"));
     let label_sym = state.sm.fresh(label_str);
     state.label = Some(label_sym);
@@ -341,17 +368,17 @@ fn labeled_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
         s.label_stk.pop();
         Box::new(Tree::LetCont(ContDeclaration {
             name: label_sym,
-            body: next(node, tail, s)
+            body: next(node, tail, s, repeat)
         }))
     };
     statement(
         node.child(2).expect("labeled statement lacks child!"),
-        &res, state
+        &res, state, false
     )
 }
 
 /* ------------ CONDITIONALS --------------- */
-fn switch_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
+fn switch_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Box<Tree> {
     let switch_label = state.pop_label().unwrap_or(state.sm.fresh("_switch_"));
     state.continue_label = Some(switch_label);
     state.break_label = Some(switch_label);
@@ -395,7 +422,7 @@ fn switch_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
         default: default,
         body: Box::new(Tree::LetCont(ContDeclaration {
             name: switch_label,
-            body: next(node, tail, state)
+            body: next(node, tail, state, repeat)
         }))
     }));
     state.continue_label = None;
@@ -417,7 +444,7 @@ fn switch_block_statement_group(node: Node, state: &mut State) -> (Vec<Operand>,
         if !cur.goto_next_sibling() { return (ops, None) }
     }
     let tail = |_: &mut State| { Box::new(Tree::Terminal) };
-    (ops, Some(statement(cur.node(), &tail, state)))
+    (ops, Some(statement(cur.node(), &tail, state, true)))
 }
 
 fn switch_label(node: Node, state: &mut State) -> Option<Operand> {
@@ -429,42 +456,44 @@ fn switch_label(node: Node, state: &mut State) -> Option<Operand> {
     }
 }
 
-fn if_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
+fn if_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Box<Tree> {
     let branch_label = state.pop_label().unwrap_or(state.sm.fresh("_if_"));
     let branch_tail = |_: &mut State| { Box::new(Tree::Break(branch_label)) };
     Box::new(Tree::If(IfStatement {
         cond: expression(state.tsret.get_field(&node, "condition"), state),
-        btrue: statement(state.tsret.get_field(&node, "consequence"), &branch_tail, state),
-        bfalse: node.child_by_field_name("alternative").map(|child| statement(child, &branch_tail, state)),
+        btrue: inline_block(state.tsret.get_field(&node, "consequence"), &branch_tail, state)
+            .expect("true branch must exist"),
+        bfalse: node.child_by_field_name("alternative").and_then(|alt| inline_block(alt, &branch_tail, state)),
         label: branch_label,
         body: Box::new(Tree::LetCont(ContDeclaration {
             name: branch_label,
-            body: next(node, tail, state)
+            body: next(node, tail, state, repeat)
         }))
     }))
 }
 
-fn while_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
+fn while_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Box<Tree> {
     let loop_label = state.pop_label().unwrap_or(state.sm.fresh("_while_"));
     let loop_tail = |_: &mut State| { Box::new(Tree::Continue(loop_label)) };
     state.break_label = Some(loop_label);
     state.continue_label = Some(loop_label);
-    let lbody = Some(statement(state.tsret.get_field(&node, "body"), &loop_tail, state));
+    let inline_body = node.child_by_field_name("body").and_then(|x| inline_block(x, &loop_tail, state));
+    // let lbody = Some(statement(state.tsret.get_field(&node, "body"), &loop_tail, state));
     state.break_label = None;
     state.continue_label = None;
     let res = Box::new(Tree::Loop(LoopStatement {
         cond: expression(state.tsret.get_field(&node, "condition"), state),
-        lbody,
+        lbody: inline_body,
         label: loop_label,
         body: Box::new(Tree::LetCont(ContDeclaration {
             name: loop_label,
-            body: next(node, tail, state)
+            body: next(node, tail, state, repeat)
         }))
     }));
     res
 }
 
-fn do_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
+fn do_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Box<Tree> {
     let loop_label = state.pop_label().unwrap_or(state.sm.fresh("_do_while_"));
     let block_label = state.sm.fresh("_block_");
     let loop_tail = |s: &mut State| {
@@ -482,12 +511,13 @@ fn do_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
     };
     state.break_label = Some(block_label);
     state.continue_label = Some(loop_label);
+    let inline_body = node.child_by_field_name("body").and_then(|x| inline_block(x, &loop_tail, state));
     let lbody = Box::new(Tree::Block(BlockStatement {
-        label: Some(block_label),
-        bbody: statement(state.tsret.get_field(&node, "body"), &loop_tail, state),
+        label: block_label,
+        bbody: inline_body,
         body: Box::new(Tree::LetCont(ContDeclaration {
             name: block_label,
-            body: next(node, tail, state)
+            body: next(node, tail, state, repeat)
         }))
     }));
     state.break_label = None;
@@ -501,7 +531,7 @@ fn do_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
     res
 }
 
-fn for_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
+fn for_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Box<Tree> {
     let loop_tail = |s: &mut State| -> Box<Tree> {
         let cond = expression(node.child_by_field_name("condition").expect("for lacks condition!"), s);
         let label = s.pop_label().unwrap_or(s.sm.fresh("_for_"));
@@ -511,7 +541,7 @@ fn for_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
             label,
             lbody: Some(lbody),
             body: Box::new(Tree::LetCont(ContDeclaration {
-                name: label, body: next(node, tail, s)
+                name: label, body: next(node, tail, s, repeat)
             }))
         }))
     };
@@ -519,7 +549,7 @@ fn for_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
     let fchild = node.child_by_field_name("init");
     if let Some(f) = fchild {
         if f.kind() == "local_variable_declaration" {
-            return local_variable_declaration(f, &loop_tail, state, true);
+            return local_variable_declaration(f, &loop_tail, state, false);
         }
     } else {
         return loop_tail(state)
@@ -528,7 +558,8 @@ fn for_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
 
     let mut cursor = node.walk();
     let mut exp_tail = loop_tail(state);
-    for child in node.children_by_field_name("init", &mut cursor) {
+    let init_children: Vec<_> = node.children_by_field_name("init", &mut cursor).collect();
+    for child in init_children.into_iter().rev() {
        exp_tail = Box::new(Tree::LetP(PrimStatement {
             name: state.sm.fresh("temp"),
             typ: Typ::Void,
@@ -545,9 +576,10 @@ fn loop_body(node: Node, state: &mut State, loop_label: Symbol) -> Box<Tree> {
     let loop_tail = |_: &mut State| { Box::new(Tree::Break(block_label)) };
     state.break_label = Some(block_label);
     state.continue_label = Some(loop_label);
+    let inline_body = node.child_by_field_name("body").and_then(|x| inline_block(x, &loop_tail, state));
     let lbody = Box::new(Tree::Block(BlockStatement {
-        label: Some(block_label),
-        bbody: statement(state.tsret.get_field(&node, "body"), &loop_tail, state),
+        label: block_label,
+        bbody: inline_body,
         body: Box::new(Tree::LetCont(ContDeclaration {
             name: block_label,
             body: update(node, state, loop_label),
@@ -561,7 +593,8 @@ fn loop_body(node: Node, state: &mut State, loop_label: Symbol) -> Box<Tree> {
 fn update(node: Node, state: &mut State, label: Symbol) -> Box<Tree> {
     let mut cursor = node.walk();
     let mut cond_tail = Box::new(Tree::Continue(label));
-    for child in node.children_by_field_name("update", &mut cursor) {
+    let update_children: Vec<_> = node.children_by_field_name("update", &mut cursor).collect();
+    for child in update_children.into_iter().rev() {
         cond_tail = Box::new(Tree::LetP(PrimStatement {
             name: state.sm.fresh("temp"),
             typ: Typ::Void,
@@ -573,7 +606,7 @@ fn update(node: Node, state: &mut State, label: Symbol) -> Box<Tree> {
     cond_tail
 }
 
-fn assert_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
+fn assert_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Box<Tree> {
     Box::new(Tree::LetP(PrimStatement {
         name: state.sm.fresh("assert"),
         typ: Typ::Void,
@@ -583,11 +616,11 @@ fn assert_statement(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
             .map(|x| expression(x, state)).collect()
         })),
         label: state.pop_label(),
-        body: next(node, tail, state)
+        body: next(node, tail, state, repeat)
     }))
 }
 
-fn local_variable_declaration(node: Node, tail: TailTp, state: &mut State, one: bool) -> Box<Tree> {
+fn local_variable_declaration(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Box<Tree> {
     let tp = state.get_typ(&node);
     let mut cur = node.named_child(1).expect("Declaration has 0 declarators!");
     let mut syms = Vec::new();
@@ -600,7 +633,7 @@ fn local_variable_declaration(node: Node, tail: TailTp, state: &mut State, one: 
         syms.push(name_sym);
         exps.push(exp);
         state.var_scope.insert(name_str, name_sym);
-        state.type_map.insert(name_sym, tp);
+        state.type_map.insert(name_sym, tp.clone());
         if let Some(nbr) = cur.next_named_sibling() {
             cur = nbr;
             continue;
@@ -608,12 +641,12 @@ fn local_variable_declaration(node: Node, tail: TailTp, state: &mut State, one: 
         // TODO dimensions, for when we declare arrays...
         break;
     };
-    let mut res = if !one { next(node, tail, state) } else { tail(state) };
+    let mut res = next(node, tail, state, repeat);
     for i in (0..syms.len()).rev() {
         res = Box::new(Tree::LetP(PrimStatement {
             name: syms[i],
             label: state.pop_label(),
-            typ: tp,
+            typ: tp.clone(),
             exp: exps.remove(i),
             body: res
         }));
@@ -621,14 +654,26 @@ fn local_variable_declaration(node: Node, tail: TailTp, state: &mut State, one: 
     res
 }
 
+fn block(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Box<Tree> {
+    let label = state.pop_label().unwrap_or(state.sm.fresh("_block_"));
+    Box::new(Tree::Block(BlockStatement {
+        label,
+        bbody: inline_block(node, tail, state),
+        body: next(node, tail, state, repeat)
+    }))
+}
+
 // TODO: Add support for blocks that aren't attached to a function.
-fn block(node: Node, tail: TailTp, state: &mut State) -> Box<Tree> {
+
+// For things like if_statements, for_statements, etc. 
+// If the statement is a block, it hoists the contents, otherwise, it uses them directly.
+fn inline_block(node: Node, tail: TailTp, state: &mut State) -> Option<Box<Tree>> {
     state.scope_in();
-    let res = if let Some(child) = node.named_child(0) {
-        // let child_tail = |s: &mut State| { next(node, tail, s) };
-        statement(child, tail, state)
+    let res = if node.kind() == "block" {
+        let child = node.named_child(0).expect("Block has child");
+        Some(statement(child, tail, state, true))
     } else {
-        todo!()
+        Some(statement(node, tail, state, false))
     };
     state.scope_out();
     res
@@ -664,11 +709,11 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
             use Operand::*;
             use Operation::*;
             let (op, idx) = match node.child(0).expect("Update Expression Has Child").kind() {
-                "++" => (PostInc, 1),
-                "--" => (PostDec, 1),
+                "++" => (PreInc, 1),
+                "--" => (PreDec, 1),
                 _ => match node.child(1).expect("Update Expression Has Child").kind() {
-                    "++" => (PreInc, 0),
-                    "--" => (PreDec, 0),
+                    "++" => (PostInc, 0),
+                    "--" => (PostDec, 0),
                     _ => panic!("Unknown Updated Expression!")
                 }
             };
@@ -704,10 +749,10 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
             let iname = state.tsret.get_text(&node);
             let isym = state.var_scope.find(iname).unwrap_or_else(||
                 state.class_scope.find(iname).unwrap_or_else(||
-                    state.sm.fresh_unknown(iname)
+                    state.sm.fresh_reserved(iname)
                 )
             );
-            (O::V(isym), state.type_map.get(&isym).copied())
+            (O::V(isym), state.type_map.get(&isym).cloned())
         }
 
         "parenthesized_expression" => type_expression(node.child(1).expect("parenthesized_expression"), state),
@@ -738,9 +783,9 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
                 } else { 
                     None
                 }
-            }).unwrap_or_else(|| state.sm.fresh_unknown(fname));
+            }).unwrap_or_else(|| state.sm.fresh_reserved(fname));
             let tree = O::T(ExprTree { op: Operation::Access, args: vec![obj, Operand::V(fsym)] });
-            (tree, state.type_map.get(&fsym).copied())
+            (tree, state.type_map.get(&fsym).cloned())
         },
         "array_access" => {
             // Once we flush out array types, then we'll have an accessor we can use to grab the access type.
@@ -760,10 +805,10 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
                 } else { 
                     None
                 }
-            }).unwrap_or_else(|| state.sm.fresh_unknown(fname));
+            }).unwrap_or_else(|| state.sm.fresh_reserved(fname));
             let mut args = vec![obj, Operand::V(fsym)];
             args.extend(parse_args(node.child_by_field_name("arguments").expect("method lacks args"), state));
-            (O::T(ExprTree { op: Operation::Call, args }), state.type_map.get(&fsym).copied())
+            (O::T(ExprTree { op: Operation::Call, args }), state.type_map.get(&fsym).cloned())
         },
         "method_reference" => panic!("Method references are not supported!"),
         "array_creation_expression" => todo!(),

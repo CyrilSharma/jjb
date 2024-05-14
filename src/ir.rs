@@ -1,7 +1,7 @@
 use std::{collections::LinkedList, rc::Rc};
 use crate::symbolmaker::Symbol;
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Typ {
     Void,
     Bool,
@@ -13,9 +13,17 @@ pub enum Typ {
     Float,
     Double,
     Str,
+    Array(ArrayTyp),
     // If we don't have access to the class,
     // We will invent a symbol for it, so this is always valid.
     Class(Symbol)
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ArrayTyp {
+    pub eltype: Box<Typ>,
+    pub len: Option<u32>,
+    pub dims: u8
 }
 
 #[derive(Clone, Debug)]
@@ -125,8 +133,8 @@ pub enum Tree {
 }
 
 pub struct BlockStatement {
-    pub label: Option<Symbol>,
-    pub bbody: TreeRef,
+    pub label: Symbol,
+    pub bbody: Option<TreeRef>,
     pub body: TreeRef
 }
 
