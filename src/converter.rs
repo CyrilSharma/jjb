@@ -90,10 +90,14 @@ impl<'l> State<'l> {
                 len: None,
                 dims: 1
             }),
-            other => Typ::Class(self.class_scope
-                .find(other)
-                .expect(&format!("Unknown Class Type {}", other))
-            )
+            "type_identifier" => {
+                let name = self.tsret.get_text(&typ_node);
+                Typ::Class(self.class_scope
+                    .find(name)
+                    .expect(&format!("Unknown Class Type {}", name))
+                )
+            },
+            other => panic!("Unknown Class Type {}", other)
         }
     }
 
@@ -134,18 +138,19 @@ fn add_declarations<'l>(root: Node, state: &mut State, entry_name: &'l str) -> S
             match child.kind() {
                 "class_declatation" => panic!("Inner classes are not supported!"),
                 "enum_declaration" => panic!("Inner enums are not supported!"),
-                "method_declaration" => {
+                "method_declaration" | "constructor_declaration" => {
                     let fname = state.tsret.get_field_text(&child, "name");
-                    let fsym = if fname == entry_name {
-                        let res = state.sm.fresh_reserved(fname);
-                        entry_sym = Some(res);
-                        res
-                    } else {
-                        state.sm.fresh(fname)
-                    };
-                    let rtyp = state.get_typ(&child);
+                    let fsym = state.sm.fresh_reserved(fname);
+                    if fname == entry_name { entry_sym = Some(fsym) }
+                    let type_child = child.child_by_field_name("type");
+                    let rtyp = type_child.map_or_else(
+                        || Typ::Class(csym),
+                        |x| state.get_typ_raw(&x)
+                    );
                     state.type_map.insert(fsym, rtyp);
-                    methods.insert(fname, fsym);
+                    methods.insert(fname, fsym).map(
+                        |_| panic!("method {} appears more then once", fname)
+                    );
                 }
                 "field_declaration" => {
                     let typ = state.get_typ(&child);
@@ -153,7 +158,9 @@ fn add_declarations<'l>(root: Node, state: &mut State, entry_name: &'l str) -> S
                     let name = state.tsret.get_field_text(&declarator, "name");
                     let var_sym = state.sm.fresh(name);
                     state.type_map.insert(var_sym, typ);
-                    members.insert(name, var_sym);
+                    members.insert(name, var_sym).map(
+                        |_| panic!("member {} appears more then once", name)
+                    );
                 },
                 other => panic!("Parse Tree uses unknown node {}\n", other)
             }
@@ -260,7 +267,7 @@ fn class_declaration(node: Node, tail: TailTp, state: &mut State, repeat: bool) 
         let mut bcursor = body.walk();
         for child in body.named_children(&mut bcursor) { 
             match child.kind() {
-                "method_declaration" => {
+                "method_declaration" | "constructor_declaration" => {
                     let text = state.tsret.get_field_text(&child, "name");
                     let name = *state.directory.resolve_method(csym, text).expect(
                         &format!("class {}, function {} wasn't inserted.", cname, text)
@@ -288,7 +295,11 @@ fn enum_declaration(node: Node, state: &mut State) -> Box<Tree> {
 }
 
 fn method_declaration(node: Node, state: &mut State, name: Symbol) -> Box<Tree> {
-    let rtyp = state.type_map.get(&name).expect("Funtype was not inserted!").clone();
+    let rtyp = if node.kind() == "constructor_declaration" {
+        None
+    } else {
+        Some(state.type_map.get(&name).expect("Funtype was not inserted!").clone())
+    };
     let mut modifiers = Vec::new();
     let mods = node.named_child(0).expect("Method has 0 children.");
     // All we really care about is whether the method is static.
@@ -323,7 +334,17 @@ fn method_declaration(node: Node, state: &mut State, name: Symbol) -> Box<Tree> 
     }
     
     let tail = |_: &mut State| { Box::new(Tree::Return(ReturnStatement { val: None } )) };
-    let body = node.child_by_field_name("body").and_then(|x| inline_block(x, &tail, state));
+    let body_node = state.tsret.get_field(&node, "body");
+    let body = if body_node.kind() == "constructor_declaration" {
+        inline_block(body_node, &tail, state)
+    } else {
+        let res = body_node.named_child(0);
+        if let Some(child) = res {
+            Some(statement(child, &tail, state, true))
+        } else {
+            None
+        }
+    };
     Box::new(Tree::LetF(FunDeclaration {
         name,
         return_typ: rtyp,
@@ -364,17 +385,31 @@ fn labeled_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) 
     let label_sym = state.sm.fresh(label_str);
     state.label = Some(label_sym);
     state.label_stk.push((label_str, label_sym));
-    let res = |s: &mut State| { 
-        s.label_stk.pop();
-        Box::new(Tree::LetCont(ContDeclaration {
-            name: label_sym,
-            body: next(node, tail, s, repeat)
-        }))
+    state.scope_in();
+    let block_tail = |_: &mut State| { Box::new(Tree::Break(label_sym)) };
+    let content = node.child(2).expect("Label should have child.");
+    let res = if content.kind() == "block" {
+        let nchild_res = content.named_child(0);
+        if let Some(child) = nchild_res {
+            Box::new(Tree::Block(BlockStatement {
+                label: label_sym,
+                bbody: Some(statement(child, &block_tail, state, true)),
+                body: Box::new(Tree::LetCont(ContDeclaration {
+                    name: label_sym,
+                    body: next(node, tail, state, repeat)
+                }))
+            }))
+        } else {
+            next(node, tail, state, repeat)
+        }
+    } else {
+        let inline_tail = |s: &mut State| { next(node, tail, s, repeat) };
+        statement(content, &inline_tail, state, false)
     };
-    statement(
-        node.child(2).expect("labeled statement lacks child!"),
-        &res, state, false
-    )
+    state.scope_out();
+    state.label_stk.pop();
+    state.label = None;
+    res
 }
 
 /* ------------ CONDITIONALS --------------- */
@@ -424,7 +459,7 @@ fn switch_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) -
             body: next(node, tail, state, repeat)
         }))
     }));
-    
+
     state.break_label = None;
     res
 }
@@ -654,23 +689,25 @@ fn local_variable_declaration(node: Node, tail: TailTp, state: &mut State, repea
 }
 
 fn block(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Box<Tree> {
-    let label = state.pop_label().unwrap_or(state.sm.fresh("_block_"));
-    Box::new(Tree::Block(BlockStatement {
-        label,
-        bbody: inline_block(node, tail, state),
-        body: next(node, tail, state, repeat)
-    }))
+    let label = state.pop_label();
+    assert!(label.is_none());
+    let block_tail = |s: &mut State| { next(node, tail, s, repeat) };
+    let res = inline_block(node, &block_tail, state);
+    if let Some(r) = res { r }
+    else { block_tail(state) }
 }
-
-// TODO: Add support for blocks that aren't attached to a function.
 
 // For things like if_statements, for_statements, etc. 
 // If the statement is a block, it hoists the contents, otherwise, it uses them directly.
 fn inline_block(node: Node, tail: TailTp, state: &mut State) -> Option<Box<Tree>> {
     state.scope_in();
     let res = if node.kind() == "block" {
-        let child = node.named_child(0).expect("Block has child");
-        Some(statement(child, tail, state, true))
+        let res = node.named_child(0);
+        if let Some(child) = res {
+            Some(statement(child, tail, state, true))
+        } else {
+            None
+        }
     } else {
         Some(statement(node, tail, state, false))
     };
@@ -746,12 +783,30 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
         "identifier" => {
             // Not actually sure if I should be allowing classes here...
             let iname = state.tsret.get_text(&node);
-            let isym = state.var_scope.find(iname).unwrap_or_else(||
-                state.class_scope.find(iname).unwrap_or_else(||
-                    state.sm.fresh_reserved(iname)
-                )
+            let isym = state.var_scope.find(iname).or_else(||
+                state.class_scope.find(iname)
             );
-            (O::V(isym), state.type_map.get(&isym).cloned())
+            if let Some(sym) = isym {
+                (O::V(sym), state.type_map.get(&sym).cloned())   
+            } else {
+                println!("Came here....!");
+                let res = state.directory.resolve_field(
+                    state.class_sym.expect(""), iname
+                );
+                if let Some(sym) = res {
+                    // The symbol belongs to the current class!
+                    // Replace it with this.symbol to represent the code better.
+                    let tree = O::T(ExprTree {
+                        op: Operation::Access,
+                        args: vec![Operand::This, Operand::V(*sym)]}
+                    );
+                    (tree, state.type_map.get(&sym).cloned())
+                } else {
+                    // The symbol belongs to a super class we don't have.
+                    let sym = state.sm.fresh_reserved(iname);
+                    (O::V(sym), state.type_map.get(&sym).cloned())   
+                }
+            }
         }
 
         "parenthesized_expression" => type_expression(node.child(1).expect("parenthesized_expression"), state),

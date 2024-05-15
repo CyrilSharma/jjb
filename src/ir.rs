@@ -171,7 +171,7 @@ pub struct FunDeclaration {
     pub args: Vec<(Symbol, Typ)>,
     pub modifiers: Vec<String>,
     pub throws: Vec<String>,
-    pub return_typ: Typ,
+    pub return_typ: Option<Typ>,
     pub body: Option<TreeRef>
 }
 
@@ -207,6 +207,7 @@ pub struct SwitchStatement {
     pub body: TreeRef
 }
 
+// TODO: Special flag for do-while to avoid lots of edge cases.
 // All other loops will be translated into this.
 pub struct LoopStatement {
     pub cond: Operand,

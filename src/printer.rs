@@ -93,8 +93,10 @@ fn print_tree(tree: &Tree, state: &mut dyn PrintState) {
         Tree::LetF(FunDeclaration { name, args, modifiers, throws, return_typ, body }) => {
             let mut header = modifiers.join(" ");
             if modifiers.len() != 0 { header.push_str(" ") }
-            header.push_str(&format!("{} {}({})",
-                serialize_tp(return_typ, state),
+            return_typ.as_ref().map(|tp| header.push_str(&format!("{} ",
+                serialize_tp(tp, state)
+            )));
+            header.push_str(&format!("{}({})",
                 state.uname(*name),
                 args.iter().map(|(sym, typ)|
                     format!("{} {}", serialize_tp(typ, state), state.uname(*sym)))

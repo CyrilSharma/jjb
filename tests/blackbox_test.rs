@@ -1,5 +1,4 @@
-use std::fmt::Error;
-use std::fs::{self, write, File};
+use std::fs::{self, write};
 use std::process::Command;
 use jjb::printer::print;
 use jjb::{converter::convert, ir::Tree, printer::str_print, symbolmaker::SymbolMaker};
@@ -12,6 +11,19 @@ macro_rules! method_test {
             test_method(stringify!($func), $str);
         }
     };
+}
+
+macro_rules! classes_test {
+    ($func:ident, $str:tt) => {
+        #[test]
+        fn $func() {
+            test_classes(stringify!($func), $str);
+        }
+    };
+}
+
+fn stash(fname: &str, content: &str) {
+    write(&format!("testfiles/{}", fname), content).expect("Write Failed!");
 }
 
 fn compile(fname: &str) {
@@ -47,8 +59,8 @@ fn execute(fname: &str) -> String {
 
 fn execute_and_cache(fname: &str) -> String {
     let res = execute(&fname);
-    let cache_path = format!("testfiles/{}_cache.txt", fname);
-    write(cache_path, &res).expect("Write Failed!");
+    let cache_path = format!("{}_cache.txt", fname);
+    stash(&cache_path, &res);
     res
 }
 
@@ -58,19 +70,17 @@ fn read_cache(fname: &str) -> Result<String, std::io::Error> {
 }
 
 fn _run(fname: &str, text: &str) -> String {
-    write(format!("testfiles/{}", fname), text)
-        .expect(&format!("Write to {} failed.", fname));
+    stash(fname, text);
     compile(&fname);
     execute_and_cache(fname)
 }
 
 fn run(fname: &str, text: &str) -> String {
-    if let Ok(res) = fs::read_to_string(format!("testfiles/{}", fname)) {
+    let content = fs::read_to_string(format!("testfiles/{}", fname));
+    if let Ok(res) = content {
         if res != text {
-            println!("res: {}", res);
             return _run(fname, text);
         } else if let Ok(cache) = read_cache(&fname) {
-            println!("cache: {}", cache);
             return cache;
         }
     }
@@ -83,8 +93,9 @@ fn test_equal(source: &str, compile: &str, tree: &Tree, sm: &SymbolMaker, name: 
     let mut buffer: Vec<u8> = Vec::new();
     buffer.reserve(compile.len());
     str_print(tree, sm, &mut buffer);
+    let buffer_str = std::str::from_utf8(&buffer).expect("Invalid UTF-8");
     let res_source = run(&source_path, &source);
-    let res_compiled = run(&compile_path, &compile);
+    let res_compiled = run(&compile_path, &buffer_str);
     if res_source != res_compiled {
         println!("------- SOURCE ------");
         println!("{}", source);
@@ -95,16 +106,19 @@ fn test_equal(source: &str, compile: &str, tree: &Tree, sm: &SymbolMaker, name: 
     }
 }
 
-fn test(name: &str, source1: &str, source2: &str) {
+fn test(name: &str, source: &str, compile: &str) {
     let mut parser = Parser::new();
     parser.set_language(&tree_sitter_java::language()).expect("Error loading Java grammar");
-    let tree = parser.parse(source2, None).unwrap();
+    let tree = parser.parse(compile, None).unwrap();
     let mut sm = SymbolMaker::new();
-    let ast = convert(tree.root_node(), source2.as_bytes(), &mut sm);
-    test_equal(source1, source2, &ast, &sm, name)
+    let ast = convert(tree.root_node(), compile.as_bytes(), &mut sm);
+    test_equal(source, compile, &ast, &sm, name)
     // The other phases will come here...
 }
 
+// You can make this better by having test dynamically insert the headers, where the headers
+// Just call Test.main() same as class. Then, it will be easy to generalize this for
+// Testing all compiler phases simultaneously.
 fn test_method(name: &str, source: &str) {
     let indented_source = source.lines().map(|line| format!("    {}", line)).collect::<Vec<_>>().join("\n");
     test(name, &format!(r#"
@@ -121,50 +135,23 @@ public class {}_compile {{
     );
 }
 
-// #[test]
-// fn test0() { 
-//     test("test0", r#"
-//         import java.util.Scanner;
-//         class Point {
-//             int x;
-//             int y;
-//         }
-//         class Test extends Object {
-//             int y;
-//             static int thing(int x, int z) throws Exception {
-//                 int a, b, c = 3;
-//                 label: a += 2;
-//                 switch (x) {
-//                     case 0:
-//                     case 1: return 2;
-//                     case 2: break;
-//                     case 3: return a;
-//                     case 4: return 3;
-//                     default: return 2;
-//                 }
-//                 if (x < 2) {
-//                     return 3;
-//                 } else {
-//                     return 2;
-//                 }
-//                 for (int i = 0; i < 10; i++) {
-//                     i += 1;
-//                 }
-
-//                 Point p = new Point(a, b);
-//                 System.out.println(2);
-                
-//                 int w = 0;
-//                 do {
-//                     w = 2;
-//                 } while (w < 3);
-//                 return x * 2;
-//             }
-//         }
-//         "#);
-// }
-
-
+fn test_classes(name: &str, source: &str) {
+    let indented_source = source.lines().map(|line| format!("    {}", line)).collect::<Vec<_>>().join("\n");
+    test(name, &format!(r#"
+public class {}_source {{
+    public static void main(String[] args) {{
+        Test.main();
+    }}
+}}
+{}"#, name, indented_source), &format!(r#"
+public class {}_compile {{
+    public static void main(String[] args) {{
+        Test.main();
+    }}
+}}
+{}"#, name, indented_source),
+    );
+}
 
 /* -------- LOOPS ---------- */
 method_test!(for_1, r#"
@@ -332,9 +319,8 @@ method_test!(switch_1, r#"
 "#);
 
 method_test!(switch_2, r#"
-    int i = 5;
     int cnt = 0;
-    while (cnt++ < 1000) {
+    while (cnt++ < 50) {
         switch (cnt % 5) {
             case 0: cnt++;
             case 1: break;
@@ -344,4 +330,52 @@ method_test!(switch_2, r#"
         }
     }
     System.out.println(cnt);
+"#);
+
+method_test!(block_1, r#"
+    {
+        int x = 0;
+        x += 1;
+        System.out.println(x);
+    }
+    {
+        int x = 0;
+        x += 1;
+        System.out.println(x);
+    }
+"#);
+
+// method_test!(switch_3, r#"
+//     int cnt = 0;
+//     int i = 0;
+//     while (cnt++ < 50) {
+//         switch (cnt % 5) {
+//             case 0: do { i++; cnt++; } while (i < 5);
+//             case 1: do { i++; cnt++; } while (i < 10);
+//             case 2: do { i++; cnt++; } while (i < 20);
+//             case 3: do { i++; cnt++; } while (i < 25);
+//             case 4: do { i++; cnt++; } while (i < 30);
+//         }
+//     }
+//     System.out.println(cnt);
+// "#);
+
+classes_test!(obj1, r#"
+    class Point {
+        int x;
+        int y;
+        Point(int _x, int _y) {
+            x = _x;
+            y = _y;
+        }
+    }
+    class Test {
+        public static void main() {
+            int x = 0, y = 2;
+            Point p = new Point(x, y);
+            p.x = x;
+            p.y = y;
+            System.out.printf("%d %d\n", p.x, p.y);
+        }
+    }
 "#);
