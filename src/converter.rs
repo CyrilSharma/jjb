@@ -42,6 +42,26 @@ impl<'l> State<'l> {
         }
     }
 
+    pub fn push_continue_label(&mut self, label: Symbol) -> Option<Symbol> {
+        let res = self.continue_label;
+        self.continue_label = Some(label);
+        res
+    }   
+
+    pub fn restore_continue_label(&mut self, label: Option<Symbol>) {
+        self.continue_label = label;
+    }
+
+    pub fn push_break_label(&mut self, label: Symbol) -> Option<Symbol> {
+        let res = self.break_label;
+        self.break_label = Some(label);
+        res
+    }  
+
+    pub fn restore_break_label(&mut self, label: Option<Symbol>) {
+        self.break_label = label;
+    }
+
     pub fn pop_label(&mut self) -> Option<Symbol> {
         let res = self.label;
         self.label = None;
@@ -509,12 +529,11 @@ fn if_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Bo
 fn while_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Box<Tree> {
     let loop_label = state.pop_label().unwrap_or(state.sm.fresh("_while_"));
     let loop_tail = |_: &mut State| { Box::new(Tree::Continue(loop_label)) };
-    state.break_label = Some(loop_label);
-    state.continue_label = Some(loop_label);
+    let bstash = state.push_break_label(loop_label);
+    let cstash = state.push_continue_label(loop_label);
     let inline_body = node.child_by_field_name("body").and_then(|x| inline_block(x, &loop_tail, state));
-    // let lbody = Some(statement(state.tsret.get_field(&node, "body"), &loop_tail, state));
-    state.break_label = None;
-    state.continue_label = None;
+    state.restore_break_label(bstash);
+    state.restore_continue_label(cstash);
     let res = Box::new(Tree::Loop(LoopStatement {
         cond: expression(state.tsret.get_field(&node, "condition"), state),
         lbody: inline_body,
@@ -543,8 +562,8 @@ fn do_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Bo
             body: Box::new(Tree::Terminal),
         }))
     };
-    state.break_label = Some(block_label);
-    state.continue_label = Some(loop_label);
+    let bstash = state.push_break_label(block_label);
+    let cstash = state.push_continue_label(loop_label);
     let inline_body = node.child_by_field_name("body").and_then(|x| inline_block(x, &loop_tail, state));
     let lbody = Box::new(Tree::Block(BlockStatement {
         label: block_label,
@@ -554,8 +573,8 @@ fn do_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Bo
             body: next(node, tail, state, repeat)
         }))
     }));
-    state.break_label = None;
-    state.continue_label = None;
+    state.restore_break_label(bstash);
+    state.restore_continue_label(cstash);
     let res = Box::new(Tree::Loop(LoopStatement {
         cond: Operand::C(Literal::Bool(true)),
         lbody: Some(lbody),
@@ -608,8 +627,8 @@ fn for_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> B
 fn loop_body(node: Node, state: &mut State, loop_label: Symbol) -> Box<Tree> {
     let block_label = state.sm.fresh("_for_body_");
     let loop_tail = |_: &mut State| { Box::new(Tree::Break(block_label)) };
-    state.break_label = Some(block_label);
-    state.continue_label = Some(loop_label);
+    let bstash = state.push_break_label(block_label);
+    let cstash = state.push_continue_label(loop_label);
     let inline_body = node.child_by_field_name("body").and_then(|x| inline_block(x, &loop_tail, state));
     let lbody = Box::new(Tree::Block(BlockStatement {
         label: block_label,
@@ -619,8 +638,8 @@ fn loop_body(node: Node, state: &mut State, loop_label: Symbol) -> Box<Tree> {
             body: update(node, state, loop_label),
         }))
     }));
-    state.break_label = None;
-    state.continue_label = None;
+    state.restore_break_label(bstash);
+    state.restore_continue_label(cstash);
     lbody
 }
 

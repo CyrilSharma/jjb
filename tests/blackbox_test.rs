@@ -297,6 +297,23 @@ method_test!(while_loop_1, r#"
     System.out.println(count);
 "#);
 
+method_test!(while_loop_2, r#"
+    int i = 0, j = 0, k = 0;
+    while (i++ < 10) {
+        while (j++ < 10) {
+            while (k++ < 10) {
+
+            }
+            if ((j ^ k) < (i ^ k)) break;
+        }
+        if ((j ^ i) < (k ^ j)) break;
+    }
+    System.out.printf(
+        "%d %d %d",
+        i, j, k
+    );
+"#);
+
 method_test!(many_loops, r#"
     int count = 0;
     for (int i = 0; i < 3; i++) {
@@ -462,14 +479,22 @@ classes_test!(obj1, r#"
             x = _x;
             y = _y;
         }
+
+        public int getx() {
+            return x;
+        }
+
+        public int gety() {
+            return y;
+        }
     }
     class Test {
         public static void main() {
             int x = 0, y = 2;
             Point p = new Point(x, y);
-            p.x = x;
-            p.y = y;
-            System.out.printf("%d %d\n", p.x, p.y);
+            p.x = 4;
+            p.y = 5;
+            System.out.printf("%d %d\n", p.getx(), p.gety());
         }
     }
 "#);

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use jjb::converter::convert;
-use jjb::ir::{BlockStatement, ClassDeclaration, ContDeclaration, ExprTree, FunDeclaration, IfStatement, ImportDeclaration, LoopStatement, Operand, PrimStatement, ReturnStatement, SwitchStatement, Tree, Typ};
+use jjb::ir::*;
 use jjb::symbolmaker::{Symbol, SymbolMaker};
 use jjb::printer::print;
 use tree_sitter::Parser;
