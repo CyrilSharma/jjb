@@ -211,7 +211,7 @@ fn serialize_op(op: &Operand, state: &dyn PrintState) -> String {
             use Operation::*;
             // Probably factor this out eventually.
             match op {
-                Add | Sub | Negate | Mul | Div | Mod |
+                Add | Sub | Mul | Div | Mod |
                 Set | PSet | SSet | MSet | DSet | ModSet |
                 AndSet | OrSet | XorSet | ShrSet |
                 UshrSet | ShlSet | Eq | Neq | G | L |
@@ -222,7 +222,7 @@ fn serialize_op(op: &Operand, state: &dyn PrintState) -> String {
                     serialize_operator(*op),
                     serialize_op(&args[1], state)
                 ),
-                PreInc | PreDec | Not | LNot if args.len() == 1 => format!("{}({})",
+                PreInc | PreDec | Not | LNot | Sub if args.len() == 1 => format!("{}({})",
                     serialize_operator(*op),
                     serialize_op(&args[0], state),
                 ),
@@ -277,7 +277,6 @@ fn serialize_operator(operator: Operation) -> &'static str {
     match operator {
         Add => "+",
         Sub => "-",
-        Negate => "-",
         Mul => "*",
         Div => "/",
         Mod => "%",
@@ -349,7 +348,7 @@ fn serialize_tp(tp: &Typ, state: &dyn PrintState) -> Cow<'static, str> {
     use Cow::Owned as O;
     match tp {
         T::Void => B("void"),
-        T::Bool => B("bool"),
+        T::Bool => B("boolean"),
         T::Char => B("char"),
         T::Byte => B("byte"),
         T::Int => B("int"),

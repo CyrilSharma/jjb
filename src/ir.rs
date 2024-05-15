@@ -1,4 +1,4 @@
-use std::{collections::LinkedList, rc::Rc};
+use std::collections::LinkedList;
 use crate::symbolmaker::Symbol;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -31,10 +31,10 @@ pub enum Literal {
     Null,
     Bool(bool),
     Char(char),
-    Byte(u8),
-    Int(u32),
-    Short(u16),
-    Long(u64),
+    Byte(i8),
+    Int(i32),
+    Short(i16),
+    Long(i64),
     Float(f32),
     Double(f64),
     String(String)
@@ -45,7 +45,6 @@ pub enum Operation {
     // Arithmetic
     Add,
     Sub,
-    Negate,
     Mul,
     Div,
     Mod,

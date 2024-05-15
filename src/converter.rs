@@ -789,7 +789,6 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
             if let Some(sym) = isym {
                 (O::V(sym), state.type_map.get(&sym).cloned())   
             } else {
-                println!("Came here....!");
                 let res = state.directory.resolve_field(
                     state.class_sym.expect(""), iname
                 );
@@ -823,8 +822,17 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
                 |result| { if result { panic!("Inline classes are not supported!"); }
             });
             let obj = state.tsret.get_field_text(&node, "type");
-            let csym = state.class_scope.find(obj).expect("new is not used on a class!");
-            let mut args = vec![O::V(csym)];
+            let csym = state.class_scope.find(obj).unwrap_or(
+                state.sm.fresh(obj)
+            );
+            // We put the symbol of the actual function call here, rather then the class symbol.
+            let res1 = state.directory.resolve_method(csym, obj);
+            let fsym = if let Some(sym) = res1 {
+                *sym
+            } else {
+                state.sm.fresh(obj)
+            };
+            let mut args = vec![O::V(fsym)];
             args.extend(parse_args(node.child_by_field_name("arguments").expect("Missing argument list."), state));
             (O::T(ExprTree { op: Operation::New, args }), Some(Typ::Class(csym)))
         },
@@ -852,10 +860,11 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
             // TODO: this is bad, it's a basic feature and you will need this for inlining extended classes.
             node.child(2).map(|x| if x.kind() == "super" { panic!("Super not supported in invocation (yet)!") });
             let (obj, obj_type) = type_expression(node.child_by_field_name("object").expect(""), state);
+
             let fname = state.tsret.get_field_text(&node, "name");
             let fsym = obj_type.and_then(|x| {
                 if let Typ::Class(csym) = x {
-                    state.directory.resolve_field(csym, fname).copied()
+                    state.directory.resolve_method(csym, fname).copied()
                 } else { 
                     None
                 }

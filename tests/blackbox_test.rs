@@ -153,6 +153,100 @@ public class {}_compile {{
     );
 }
 
+method_test!(negative_1, r#"
+    int x = 5;
+    int y = -7;
+    System.out.println(-x + y);
+"#);
+
+method_test!(ternary, r#"
+    boolean a = false;
+    System.out.println(a ? 1 : -1);
+    boolean b = true;
+    System.out.println(b ? 1 : -1);
+"#);
+
+method_test!(prim_arith, r#"
+    int a=1, b=-2, c=3, d=-4, e=5, f=-6, g=7, h=-8;
+    for (int it = 0; it < 10; it++) {
+        a = b + c;
+        b = c - d;
+        c = d * e;
+        d = e / 3;
+        e = f % 7;
+        ++f;
+        --g;
+        h++;
+        a--;
+    }
+    System.out.printf(
+        "%d %d %d %d %d %d %d %d\n",
+        a, b, c, d, e, f, g, h
+    );
+"#);
+
+method_test!(prim_modifying, r#"
+    int a=1, b=-2, c=3, d=-4, e=5, f=-6, g=7, h=-8, i=9, j=-10, k=11;
+    for (int it = 0; it < 10; it++) {
+        a += b;
+        b -= c;
+        c *= d;
+        d /= 3;
+        e %= 4;
+        f &= g;
+        g |= h;
+        h ^= i;
+        i >>= j;
+        j >>>= k;
+        k <<= a;
+    }
+    System.out.printf(
+        "%d %d %d %d %d %d %d %d %d %d %d\n",
+        a, b, c, d, e, f, g, h, i, j, k
+    );
+"#);
+
+method_test!(prim_conditionals, r#"
+    boolean a=true, b=false, c=true, d=false, e=true, f=true, g=false, h=true, i=true;
+    for (int it = 0; it < 10; it++) {
+        a = a == b;
+        b = c != d;
+        c = (d ? 1 : -1) > (e ? 1 : -1);
+        d = (e ? 1 : -1) >= (f ? 1 : -1);
+        e = (f ? 1 : -1) <= (g ? 1 : -1);
+        f = (g ? 1 : -1) < (h ? 1 : -1);
+        g = h && i;
+        h = i || a;
+        i = !a;
+        System.out.print(a ? 1 : 0);
+        System.out.print(b ? 1 : 0);
+        System.out.print(c ? 1 : 0);
+        System.out.print(d ? 1 : 0);
+        System.out.print(e ? 1 : 0);
+        System.out.print(f ? 1 : 0);
+        System.out.print(g ? 1 : 0);
+        System.out.print(h ? 1 : 0);
+        System.out.print(i ? 1 : 0);
+    }
+"#);
+
+method_test!(prim_bitwise, r#"
+    int a=1, b=-2, c=3, d=-4, e=5, f=-6, g=7;
+    for (int it = 0; it < 10; it++) {
+        a = ~b;
+        b = c << 3;
+        c = d >> 1;
+        d = e >>> 2;
+        e = f & g;
+        f = g | a;
+        g = a ^ b; 
+    }
+    System.out.printf(
+        "%d %d %d %d %d %d %d\n",
+        a, b, c, d, e, f, g
+    );
+"#);
+
 /* -------- LOOPS ---------- */
 method_test!(for_1, r#"
     int count = 0;
