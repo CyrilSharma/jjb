@@ -22,7 +22,6 @@ pub enum Typ {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ArrayTyp {
     pub eltype: Box<Typ>,
-    pub len: Option<u32>,
     pub dims: u8
 }
 

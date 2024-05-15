@@ -357,10 +357,9 @@ fn serialize_tp(tp: &Typ, state: &dyn PrintState) -> Cow<'static, str> {
         T::Float => B("float"),
         T::Double => B("double"),
         T::Str => B("String"),
-        T::Array(ArrayTyp { eltype, len, dims }) =>  O(format!("{}[{}]{}",
+        T::Array(ArrayTyp { eltype, dims }) =>  O(format!("{}{}",
             serialize_tp(eltype, state),
-            if let Some(l) = len { l.to_string() } else { "".to_string() },
-            "[]".repeat((dims - 1) as usize)
+            "[]".repeat(*dims as usize)
         )),
         T::Class(s) => O(state.uname(*s))
     }

@@ -99,19 +99,26 @@ impl<'l> State<'l> {
                 other => panic!("floating_point_type: {}", other)
             }
 
-            // "array_type" => {
-            //     let eltyp = self.get_typ_raw(&self.tsret.get_field(&typ_node, "element"));
-            //     todo!()
-            // },
+            "array_type" => {
+                let eltyp = self.get_typ_raw(&self.tsret.get_field(&typ_node, "element"));
+                let mut ndims = 0;
+                let dim_node = self.tsret.get_field(&typ_node, "dimensions");
+                let mut dim_cursor = dim_node.walk();
+                for child in dim_node.children(&mut dim_cursor) {
+                    match self.tsret.get_text(&child) {
+                        "]" => ndims += 1,
+                        _ => ()
+                    }
+                }
+                Typ::Array(ArrayTyp {
+                    eltype: Box::new(eltyp),
+                    dims: ndims
+                })
+            },
 
-            // Temporary hack.
-            "array_type" => Typ::Array(ArrayTyp {
-                eltype: Box::new(Typ::Str),
-                len: None,
-                dims: 1
-            }),
             "type_identifier" => {
                 let name = self.tsret.get_text(&typ_node);
+                if name == "String" { return Typ::Str }
                 Typ::Class(self.class_scope
                     .find(name)
                     .expect(&format!("Unknown Class Type {}", name))
@@ -869,10 +876,15 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
             (tree, state.type_map.get(&fsym).cloned())
         },
         "array_access" => {
-            // Once we flush out array types, then we'll have an accessor we can use to grab the access type.
             let (arr, arr_type) = type_expression(state.tsret.get_field(&node, "array"), state);
             let index = expression(state.tsret.get_field(&node, "index"), state);
-            (O::T(ExprTree { op: Operation::Index, args: vec![arr, index] }), todo!())
+            let rtyp = arr_type.map(|tp| match tp {
+                Typ::Array(ArrayTyp { eltype, dims }) => if dims == 1 { *eltype } else {
+                    Typ::Array(ArrayTyp { eltype, dims: dims - 1 })
+                },
+                other => panic!("Invalid array access on {:?}", other)
+            });
+            (O::T(ExprTree { op: Operation::Index, args: vec![arr, index] }), rtyp)
         },
         "method_invocation" => {
             node.child_by_field_name("type_arguments").map(|_| panic!("Templates not supported!"));
