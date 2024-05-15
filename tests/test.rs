@@ -1,7 +1,8 @@
+use std::fmt::Error;
 use std::fs::{self, write, File};
 use std::process::Command;
 use jjb::printer::print;
-use jjb::{converter::convert, ir::Tree, printer::file_print, symbolmaker::SymbolMaker};
+use jjb::{converter::convert, ir::Tree, printer::str_print, symbolmaker::SymbolMaker};
 use tree_sitter::Parser;
 
 macro_rules! method_test {
@@ -13,45 +14,46 @@ macro_rules! method_test {
     };
 }
 
-fn run(fname: &str) -> String {
-    // Compile the Java file using javac
+fn compile(fname: &str) {
     let compile_output = Command::new("javac")
         .arg(fname)
         .output()
         .expect("Failed to execute 'javac' command");
-
-    // Check if compilation was successful
-    if !compile_output.status.success() {
-        return String::from_utf8_lossy(&compile_output.stderr).to_string();
-    }
-
-    // Run the compiled Java class using java
-    let class_name = fname.trim_end_matches(".java");
-    let run_output = Command::new("java")
-        .arg(class_name)
-        .output()
-        .expect("Failed to execute 'java' command");
-
-    // Return the output of running the Java program
-    String::from_utf8_lossy(&run_output.stdout).to_string()
+    assert!(compile_output.status.success());
 }
 
-fn cleanup(name: &str) {
-    let _ = fs::remove_file(format!("{}.java", name));
-    let _ = fs::remove_file(format!("{}.class", name));
+fn execute(fname: &str) -> String {
+     let class_name = fname.trim_end_matches(".java");
+     let run_output = Command::new("java")
+         .arg(class_name)
+         .output()
+         .expect("Failed to execute 'java' command");
+     String::from_utf8_lossy(&run_output.stdout).to_string()
 }
 
-fn test_equal(source: &str, tree: &Tree, sm: &SymbolMaker, name: &str) {
-    let path = format!("{}.java", name);
-    write(path.clone(), source).expect("Source Write Failed!");
-    let res_source = run(&path);
-    let compiled_file = File::create(path.clone()).expect("Compile Write Failed!");
-    file_print(tree, sm, compiled_file);
-    let res_compiled = run(&path);
-    cleanup(name);
+
+fn test_equal(source1: &str, source2: &str, tree: &Tree, sm: &SymbolMaker, name: &str) {
+    let source_path = format!("testfiles/{}_source.java", name);
+    let f = || { 
+        write(source_path.clone(), source1).expect("Write Failed!");
+        compile(&source_path);
+    };
+    fs::read_to_string(&source_path).map_or_else(|_| f(), |res| if res != source1 { f() });
+    let res_source = execute(&source_path);
+
+    let compile_path = format!("testfiles/{}_compile.java", name);
+    let mut buffer: Vec<u8> = Vec::new();
+    buffer.reserve(source2.len());
+    str_print(tree, sm, &mut buffer);
+    let f = || { 
+        write(compile_path.clone(), buffer.clone()).expect("Write Failed!");
+        compile(&compile_path);
+    };
+    fs::read(&compile_path).map_or_else(|_| f(), |res| if res != buffer { f() });
+    let res_compiled = execute(&compile_path);
     if res_source != res_compiled {
         println!("------- SOURCE ------");
-        println!("{}", source);
+        println!("{}", source1);
         println!("------- COMPILED ------");
         print(tree, sm);
         println!("----------------------");
@@ -59,24 +61,30 @@ fn test_equal(source: &str, tree: &Tree, sm: &SymbolMaker, name: &str) {
     }
 }
 
-fn test(name: &str, source: &str) {
+fn test(name: &str, source1: &str, source2: &str) {
     let mut parser = Parser::new();
     parser.set_language(&tree_sitter_java::language()).expect("Error loading Java grammar");
-    let tree = parser.parse(source, None).unwrap();
+    let tree = parser.parse(source2, None).unwrap();
     let mut sm = SymbolMaker::new();
-    let ast = convert(tree.root_node(), source.as_bytes(), &mut sm);
-    test_equal(source, &ast, &sm, name)
+    let ast = convert(tree.root_node(), source2.as_bytes(), &mut sm);
+    test_equal(source1, source2, &ast, &sm, name)
     // The other phases will come here...
 }
 
 fn test_method(name: &str, source: &str) {
     let indented_source = source.lines().map(|line| format!("    {}", line)).collect::<Vec<_>>().join("\n");
     test(name, &format!(r#"
-public class {} {{
+public class {}_source {{
     public static void main(String[] args) {{
         {}
     }}
-}}"#, name, indented_source))
+}}"#, name, indented_source), &format!(r#"
+public class {}_compiled {{
+    public static void main(String[] args) {{
+        {}
+    }}
+}}"#, name, indented_source),
+    );
 }
 
 // #[test]

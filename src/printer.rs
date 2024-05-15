@@ -11,8 +11,8 @@ pub fn print(tree: &Tree, sm: &SymbolMaker) {
 }
 
 #[allow(dead_code)]
-pub fn file_print(tree: &Tree, sm: &SymbolMaker, file: File) {
-    let mut state = FileState { level: 0, sm, buf: Box::new(io::BufWriter::new(file)) };
+pub fn str_print(tree: &Tree, sm: &SymbolMaker, buf: &mut Vec<u8>) {
+    let mut state = StrState { level: 0, sm, buf };
     print_tree(tree, &mut state);
 }
 
@@ -23,18 +23,18 @@ pub trait PrintState {
     fn println(&mut self, text: &str);
 }
 
-struct FileState<'l> {
+struct StrState<'l> {
     level: u32,
     sm: &'l SymbolMaker,
-    buf: Box<io::BufWriter<File>>
+    buf: &'l mut Vec<u8>
 }
 
-impl<'l> PrintState for FileState<'l> {
+impl<'l> PrintState for StrState<'l> {
     fn indent(&mut self) { self.level += 1 }
     fn outdent(&mut self) { self.level -= 1 }
     fn uname(&self, sym: Symbol) -> String { self.sm.uname(sym) }
     fn println(&mut self, text: &str) {
-        writeln!(&mut self.buf, "{}{}", "  ".repeat(self.level as usize), text)
+        writeln!(self.buf, "{}{}", "  ".repeat(self.level as usize), text)
             .expect("Write failed!")
     }
 }
