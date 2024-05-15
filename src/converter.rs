@@ -380,7 +380,6 @@ fn labeled_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) 
 /* ------------ CONDITIONALS --------------- */
 fn switch_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) -> Box<Tree> {
     let switch_label = state.pop_label().unwrap_or(state.sm.fresh("_switch_"));
-    state.continue_label = Some(switch_label);
     state.break_label = Some(switch_label);
 
     let arg = expression(state.tsret.get_field(&node, "condition"), state);
@@ -425,7 +424,7 @@ fn switch_statement(node: Node, tail: TailTp, state: &mut State, repeat: bool) -
             body: next(node, tail, state, repeat)
         }))
     }));
-    state.continue_label = None;
+    
     state.break_label = None;
     res
 }

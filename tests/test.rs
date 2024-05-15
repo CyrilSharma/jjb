@@ -17,43 +17,77 @@ macro_rules! method_test {
 fn compile(fname: &str) {
     let compile_output = Command::new("javac")
         .arg(fname)
+        .current_dir("testfiles/")
         .output()
         .expect("Failed to execute 'javac' command");
-    assert!(compile_output.status.success());
+    let stderr = String::from_utf8_lossy(&compile_output.stderr).to_string();
+    assert!(
+        stderr.trim().is_empty(),
+        "stderr is not empty: {}",
+        stderr
+    );
 }
 
 fn execute(fname: &str) -> String {
      let class_name = fname.trim_end_matches(".java");
      let run_output = Command::new("java")
          .arg(class_name)
+         .current_dir("testfiles/")
          .output()
          .expect("Failed to execute 'java' command");
-     String::from_utf8_lossy(&run_output.stdout).to_string()
+    let stdout = String::from_utf8_lossy(&run_output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&run_output.stderr).to_string();
+    assert!(
+        stderr.trim().is_empty(),
+        "stderr is not empty: {}",
+        stderr
+    );
+    stdout
 }
 
+fn execute_and_cache(fname: &str) -> String {
+    let res = execute(&fname);
+    let cache_path = format!("testfiles/{}_cache.txt", fname);
+    write(cache_path, &res).expect("Write Failed!");
+    res
+}
 
-fn test_equal(source1: &str, source2: &str, tree: &Tree, sm: &SymbolMaker, name: &str) {
-    let source_path = format!("testfiles/{}_source.java", name);
-    let f = || { 
-        write(source_path.clone(), source1).expect("Write Failed!");
-        compile(&source_path);
-    };
-    fs::read_to_string(&source_path).map_or_else(|_| f(), |res| if res != source1 { f() });
-    let res_source = execute(&source_path);
+fn read_cache(fname: &str) -> Result<String, std::io::Error> {
+    let cache_path = format!("testfiles/{}_cache.txt", fname);
+    fs::read_to_string(cache_path)
+}
 
-    let compile_path = format!("testfiles/{}_compile.java", name);
+fn _run(fname: &str, text: &str) -> String {
+    write(format!("testfiles/{}", fname), text)
+        .expect(&format!("Write to {} failed.", fname));
+    compile(&fname);
+    execute_and_cache(fname)
+}
+
+fn run(fname: &str, text: &str) -> String {
+    if let Ok(res) = fs::read_to_string(format!("testfiles/{}", fname)) {
+        if res != text {
+            println!("res: {}", res);
+            return _run(fname, text);
+        } else if let Ok(cache) = read_cache(&fname) {
+            println!("cache: {}", cache);
+            return cache;
+        }
+    }
+    _run(fname, text)
+}
+
+fn test_equal(source: &str, compile: &str, tree: &Tree, sm: &SymbolMaker, name: &str) {
+    let source_path = format!("{}_source.java", name);
+    let compile_path = format!("{}_compile.java", name);
     let mut buffer: Vec<u8> = Vec::new();
-    buffer.reserve(source2.len());
+    buffer.reserve(compile.len());
     str_print(tree, sm, &mut buffer);
-    let f = || { 
-        write(compile_path.clone(), buffer.clone()).expect("Write Failed!");
-        compile(&compile_path);
-    };
-    fs::read(&compile_path).map_or_else(|_| f(), |res| if res != buffer { f() });
-    let res_compiled = execute(&compile_path);
+    let res_source = run(&source_path, &source);
+    let res_compiled = run(&compile_path, &compile);
     if res_source != res_compiled {
         println!("------- SOURCE ------");
-        println!("{}", source1);
+        println!("{}", source);
         println!("------- COMPILED ------");
         print(tree, sm);
         println!("----------------------");
@@ -79,7 +113,7 @@ public class {}_source {{
         {}
     }}
 }}"#, name, indented_source), &format!(r#"
-public class {}_compiled {{
+public class {}_compile {{
     public static void main(String[] args) {{
         {}
     }}
@@ -282,4 +316,32 @@ method_test!(label_2, r#"
             break label1;
         }
     }
+"#);
+
+method_test!(switch_1, r#"
+    int i = 5;
+    int cnt = 0;
+    switch (i) {
+        case 0: cnt++;
+        case 1: cnt *= 2;
+        case 2: cnt ^= 1;
+        case 3: cnt <<= 1;
+        case 4: cnt *= cnt;
+    }
+    System.out.println(cnt);
+"#);
+
+method_test!(switch_2, r#"
+    int i = 5;
+    int cnt = 0;
+    while (cnt++ < 1000) {
+        switch (cnt % 5) {
+            case 0: cnt++;
+            case 1: break;
+            case 2: cnt |= 1;
+            case 3: continue;
+            case 4: cnt *= cnt;
+        }
+    }
+    System.out.println(cnt);
 "#);
