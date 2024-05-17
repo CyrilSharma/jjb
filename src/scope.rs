@@ -28,7 +28,7 @@ impl<'l> Scope<'l> {
         let len = self.table.len();
         if let Some(back) = self.table.get_mut(len - 1) {
             if back.insert(name, sym).is_some() {
-                panic!("Overwriting {} with {:?}", name, sym)
+                panic!("Overwriting ({}) with {:?}", name, sym)
             }
             return;
         }

@@ -37,52 +37,44 @@ fn census(root: &Tree) -> CheckState {
 #[allow(unused)]
 fn traverse(root: &Tree, state: &mut CheckState) {
     match root {
-        Tree::LetI(ImportDeclaration { path, body }) => traverse(body, state),
+        Tree::Program(stmts) => stmts.iter().for_each(|s| traverse(s, state)),
+        Tree::LetI(ImportDeclaration { path }) => (),
         Tree::LetF(FunDeclaration { name, args, modifiers, throws, return_typ, body }) => {
             inc(&mut state.fun_syms, *name);
             for (sym, _) in args { inc(&mut state.var_syms, *sym) }
-            body.as_ref().map(|b| traverse(b, state));
+            body.iter().for_each(|b| traverse(b, state));
         },
-        Tree::LetC(ClassDeclaration { name, members, methods, extends, body }) => {
+        Tree::LetC(ClassDeclaration { name, members, methods, extends }) => {
             inc(&mut state.class_syms, *name);
             for method in methods { traverse(&method, state) }
-            traverse(body, state);
         }
         Tree::LetE(_) => todo!(),
-        Tree::LetCont(ContDeclaration { name, body }) => traverse(body, state),
-        Tree::LetP(PrimStatement { name, typ, label, exp, body }) =>  {
+        Tree::LetP(PrimStatement { name, typ, exp }) =>  {
             if *typ != Typ::Void { inc(&mut state.var_syms, *name) }
             exp.as_ref().map(|e| operand(e, state));
-            label.map(|l| inc(&mut state.label_syms, l));
-            traverse(body, state)
         },
-        Tree::Block(BlockStatement { label, bbody, body }) => {
-            bbody.as_ref().map(|b| traverse(b, state));
+        Tree::Block(BlockStatement { label, bbody }) => {
+            bbody.iter().for_each(|b| traverse(b, state));
             inc(&mut state.label_syms, *label);
-            traverse(body, state)
         },
-        Tree::Switch(SwitchStatement { arg, label, cases, default, body }) => {
-            for (ops, code) in cases { traverse(code, state) }
-            default.as_ref().map(|d| traverse(d, state));
-            traverse(body, state)
+        Tree::Switch(SwitchStatement { arg, label, cases, default }) => {
+            for (ops, code) in cases { code.iter().for_each(|t| traverse(t, state)) }
+            for d in default { traverse(d, state) }
         },
-        Tree::Loop(LoopStatement { cond, label, lbody, body }) => {
+        Tree::Loop(LoopStatement { cond, label, lbody, dowhile }) => {
             inc(&mut state.label_syms, *label);
-            lbody.as_ref().map(|l| traverse(l, state));
-            traverse(body, state);
+            for l in lbody { traverse(l, state) };
         },
-        Tree::If(IfStatement { cond, label, btrue, bfalse, body }) => {
+        Tree::If(IfStatement { cond, label, btrue, bfalse }) => {
             inc(&mut state.label_syms, *label);
-            traverse(btrue, state);
-            bfalse.as_ref().map(|b| traverse(b, state));
-            traverse(body, state);
+            for b in btrue { traverse(b, state) }
+            for b in bfalse { traverse(b, state) }
         }
         Tree::Try(_) => todo!(),
         Tree::Return(ReturnStatement { val }) => (),
         Tree::Continue(label) => inc(&mut state.label_syms, *label),
         Tree::Break(label) => inc(&mut state.label_syms, *label),
-        Tree::EntryPoint(_) => (),
-        Tree::Terminal => ()
+        Tree::EntryPoint(_) => ()
     }
 }
 

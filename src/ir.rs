@@ -14,8 +14,6 @@ pub enum Typ {
     Double,
     Str,
     Array(ArrayTyp),
-    // If we don't have access to the class,
-    // We will invent a symbol for it, so this is always valid.
     Class(Symbol)
 }
 
@@ -134,18 +132,13 @@ pub enum Operation {
  * Easy to unroll (high-level structures are kept).
  */
 
-
-// Refactor to just use linked lists...
-// It's so much easier I really should have thought this through.
-// Note: there's no need for classes and imports to have body statements.
-// Similar to functions, we can just have a top level list of these things in Program.
-type TreeRef = Box<Tree>;
+pub type TreeContainer = LinkedList<Tree>;
 pub enum Tree {
+    Program(TreeContainer),
     LetI(ImportDeclaration),
     LetF(FunDeclaration),
     LetC(ClassDeclaration),
     LetE(EnumDeclaration),
-    LetCont(ContDeclaration),
     LetP(PrimStatement),
     Block(BlockStatement),
     Switch(SwitchStatement),
@@ -153,21 +146,18 @@ pub enum Tree {
     If(IfStatement),
     Try(TryStatement),
     Return(ReturnStatement),
-    Continue(Symbol),
     Break(Symbol),
-    EntryPoint(Symbol),
-    Terminal
+    Continue(Symbol),
+    EntryPoint(Symbol)
 }
 
 pub struct BlockStatement {
     pub label: Symbol,
-    pub bbody: Option<TreeRef>,
-    pub body: TreeRef
+    pub bbody: TreeContainer
 }
 
 pub struct ImportDeclaration {
-    pub path: String,
-    pub body: TreeRef
+    pub path: String
 }
 
 #[derive(Clone, Debug)]
@@ -189,9 +179,7 @@ pub struct ExprTree {
 pub struct PrimStatement {
     pub name: Symbol,
     pub typ: Typ,
-    pub label: Option<Symbol>,
-    pub exp: Option<Operand>,
-    pub body: TreeRef
+    pub exp: Option<Operand>
 }
 
 pub struct FunDeclaration {
@@ -200,15 +188,14 @@ pub struct FunDeclaration {
     pub modifiers: Vec<String>,
     pub throws: Vec<String>,
     pub return_typ: Option<Typ>,
-    pub body: Option<TreeRef>
+    pub body: TreeContainer
 }
 
 pub struct ClassDeclaration {
     pub name: Symbol,
     pub members: Vec<(Symbol, Typ)>,
-    pub methods: LinkedList<TreeRef>,
-    pub extends: Option<Symbol>,
-    pub body: TreeRef,
+    pub methods: TreeContainer,
+    pub extends: Option<Symbol>
     // I never use nested classes, and it's relatively easy to avoid them.
     // If this gets open-sourced, this is something I could work on.
     // pub classes: LinkedList<TreeRef>,
@@ -218,21 +205,14 @@ pub struct ClassDeclaration {
 pub struct EnumDeclaration {
     pub name: Symbol,
     pub members: Vec<Symbol>,
-    pub values: Option<Vec<Literal>>,
-    pub body: TreeRef
-}
-
-pub struct ContDeclaration {
-    pub name: Symbol,
-    pub body: TreeRef
+    pub values: Option<Vec<Literal>>
 }
 
 pub struct SwitchStatement {
     pub arg: Operand,
     pub label: Symbol,
-    pub cases: Vec<(Vec<Operand>, Box<Tree>)>,
-    pub default: Option<Box<Tree>>,
-    pub body: TreeRef
+    pub cases: Vec<(Vec<Operand>, TreeContainer)>,
+    pub default: TreeContainer
 }
 
 // TODO: Special flag for do-while to avoid lots of edge cases.
@@ -240,26 +220,24 @@ pub struct SwitchStatement {
 pub struct LoopStatement {
     pub cond: Operand,
     pub label: Symbol,
-    pub lbody: Option<TreeRef>,
-    pub body: TreeRef
+    pub lbody: TreeContainer,
+    pub dowhile: bool
 }
 
 pub struct IfStatement {
     pub cond: Operand,
     pub label: Symbol,
-    pub btrue: TreeRef,
-    pub bfalse: Option<TreeRef>,
-    pub body: TreeRef
+    pub btrue: TreeContainer,
+    pub bfalse: TreeContainer
 }
 
 pub struct TryStatement {
-    pub main: TreeRef,
+    pub main: TreeContainer,
     pub label: Symbol,
     // The class symbol and the arg symbol.
     pub exceptions: Vec<(Symbol, Symbol)>,
-    pub catches: Vec<TreeRef>,
-    pub finally: TreeRef,
-    pub body: TreeRef
+    pub catches: Vec<TreeContainer>,
+    pub finally: TreeContainer
 }
 
 pub struct ReturnStatement {

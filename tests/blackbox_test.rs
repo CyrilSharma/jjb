@@ -456,20 +456,20 @@ method_test!(block_1, r#"
     }
 "#);
 
-// method_test!(switch_3, r#"
-//     int cnt = 0;
-//     int i = 0;
-//     while (cnt++ < 50) {
-//         switch (cnt % 5) {
-//             case 0: do { i++; cnt++; } while (i < 5);
-//             case 1: do { i++; cnt++; } while (i < 10);
-//             case 2: do { i++; cnt++; } while (i < 20);
-//             case 3: do { i++; cnt++; } while (i < 25);
-//             case 4: do { i++; cnt++; } while (i < 30);
-//         }
-//     }
-//     System.out.println(cnt);
-// "#);
+method_test!(switch_3, r#"
+    int cnt = 0;
+    int i = 0;
+    while (cnt++ < 50) {
+        switch (cnt % 5) {
+            case 0: do { i++; cnt++; } while (i < 5);
+            case 1: do { i++; cnt++; } while (i < 10);
+            case 2: do { i++; cnt++; } while (i < 20);
+            case 3: do { i++; cnt++; } while (i < 25);
+            case 4: do { i++; cnt++; } while (i < 30);
+        }
+    }
+    System.out.println(cnt);
+"#);
 
 classes_test!(obj1, r#"
     class Point {

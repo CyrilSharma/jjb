@@ -1,8 +1,7 @@
 use std::borrow::Cow;
 use crate::ir::*;
 use crate::symbolmaker::{Symbol, SymbolMaker};
-use std::fs::File;
-use std::io::{self, BufWriter, Write};
+use std::io::{self, Write};
 
 #[allow(dead_code)]
 pub fn print(tree: &Tree, sm: &SymbolMaker) {
@@ -40,11 +39,11 @@ impl<'l, W: Write> PrintState<'l, W> {
 
 fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
     match tree {
-        Tree::LetI(ImportDeclaration { path, body }) => {
+        Tree::Program(stmts) => stmts.iter().for_each(|s| print_tree(s, state)),
+        Tree::LetI(ImportDeclaration { path }) => {
             state.println(&format!("import {};", path));
-            print_tree(body, state);
         },
-        Tree::LetP(PrimStatement { name, typ, exp, body, label }) => {
+        Tree::LetP(PrimStatement { name, typ, exp }) => {
             if *typ != Typ::Void {
                 if let Some(e) = exp {
                     let tp = serialize_tp(typ, state);
@@ -64,7 +63,6 @@ fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
                     state.println(&format!("{};", op));
                 }
             }
-            print_tree(body, state);
         },
         Tree::LetF(FunDeclaration { name, args, modifiers, throws, return_typ, body }) => {
             let mut header = modifiers.join(" ");
@@ -85,10 +83,10 @@ fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
                 header.push_str(&throws.join(", "));
             }
             state.println(&format!("{} {{", header));
-            body.as_ref().map(|b| state.indent(|s| print_tree(b, s)));
+            body.iter().for_each(|b| state.indent(|s| print_tree(b, s)));
             state.println("}");
         },
-        Tree::LetC(ClassDeclaration { name, members, methods, extends, body }) => {
+        Tree::LetC(ClassDeclaration { name, members, methods, extends }) => {
             let mut header = format!("class {}", state.uname(*name));
             if let Some(e) = extends {
                 header.push_str(&format!(" extends {}", &state.uname(*e)));
@@ -102,10 +100,9 @@ fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
             }
             methods.iter().for_each(|method| state.indent(|state| print_tree(method, state)));
             state.println("}");
-            print_tree(body, state);
         },
         Tree::LetE(_) => todo!(),
-        Tree::Switch(SwitchStatement { arg, cases, default, body, label }) =>  {
+        Tree::Switch(SwitchStatement { arg, cases, default, label }) =>  {
             let op = serialize_op(arg, state);
             state.println(&format!("{}: switch ({}) {{",
                 state.uname(*label), op
@@ -116,35 +113,34 @@ fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
                         let sop = serialize_op(op, state);
                         state.println(&format!("case {}: ", sop));
                     }
-                    state.indent(|state| print_tree(tree,state));
+                    state.indent(|state| tree.iter().for_each(
+                        |s| { print_tree(s, state); }
+                    ));
                 }
                 state.println("default: ");
             });
-            default.as_ref().map(|d| state.indent(|state| print_tree(d, state)));
+            default.iter().for_each(|d| state.indent(|state| print_tree(d, state)));
             state.println("}");
-            print_tree(body, state);
         },
-        Tree::Loop(LoopStatement { cond, lbody, body, label }) => {
+        Tree::Loop(LoopStatement { cond, lbody, label, dowhile }) => {
             let sop = serialize_op(cond, state);
-            state.println(&format!("{}: while ({}) {{",
-                state.uname(*label), sop
-            ));
-            lbody.as_ref().map(|t| state.indent(|state| print_tree(t, state)));
-            state.println("}");
-            print_tree(body, state);
+            if *dowhile { state.println(&format!("{}: do {{", state.uname(*label))); } 
+            else { state.println(&format!("{}: while ({}) {{", state.uname(*label), sop));}
+            lbody.iter().for_each(|t| state.indent(|state| print_tree(t, state)));
+            if *dowhile { state.println(&format!("}} while ({});", sop)); } 
+            else { state.println("}"); }
         }
-        Tree::If(IfStatement { cond, btrue, bfalse, body, label }) => {
+        Tree::If(IfStatement { cond, btrue, bfalse, label }) => {
             let op = serialize_op(cond, state);
             state.println(&format!("{}: if ({}) {{",
                 state.uname(*label), op
             ));
-            state.indent(|state| print_tree(btrue, state));
-            if bfalse.is_some() {
+            state.indent(|state| btrue.iter().for_each(|t| print_tree(t, state)));
+            if bfalse.len() != 0 {
                 state.println("} else {");
-                bfalse.as_ref().map(|x| state.indent(|state| print_tree(x, state)));
+                bfalse.iter().for_each(|x| state.indent(|state| print_tree(x, state)));
             }
             state.println("}");
-            print_tree(body, state);
         },
         Tree::Try(_) => todo!(),
         Tree::Return(ReturnStatement { val }) => {
@@ -158,22 +154,15 @@ fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
         Tree::EntryPoint(sym) => state.println(
             &format!("// {}();", state.uname(*sym))
         ),
-        Tree::Block(BlockStatement { label, bbody, body }) => {
+        Tree::Block(BlockStatement { label, bbody }) => {
             let mut buf = format!("{}: ", state.uname(*label));
             buf += "{";
             state.println(&buf);
-            bbody.as_ref().map(|b| state.indent(|state| print_tree(b.as_ref(), state)));
+            bbody.iter().for_each(|t| state.indent(|state| print_tree(t, state)));
             state.println("}");
-            print_tree(body, state);
-        },
-        Tree::LetCont(ContDeclaration { name, body }) => {
-            state.println(&format!("/* -- continuation {} -- */", state.uname(*name)));
-            print_tree(body, state);
         },
         Tree::Continue(sym) => state.println(&format!("continue {};", state.uname(*sym))),
-        Tree::Break(sym) => state.println(&format!("break {};", state.uname(*sym))),
-        Tree::Terminal => ()
-        // other => todo!()
+        Tree::Break(sym) => state.println(&format!("break {};", state.uname(*sym)))
     }
 }
 
