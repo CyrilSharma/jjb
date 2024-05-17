@@ -2,66 +2,43 @@ use std::borrow::Cow;
 use crate::ir::*;
 use crate::symbolmaker::{Symbol, SymbolMaker};
 use std::fs::File;
-use std::io::{self, Write};
+use std::io::{self, BufWriter, Write};
 
 #[allow(dead_code)]
 pub fn print(tree: &Tree, sm: &SymbolMaker) {
-    let mut state = StdoutState { level: 0, sm };
+    let stdout = io::stdout();
+    let handle = stdout.lock();
+    let mut state = PrintState { level: 0, sm, buf: handle };
     print_tree(tree, &mut state);
 }
 
 #[allow(dead_code)]
 pub fn str_print(tree: &Tree, sm: &SymbolMaker, buf: &mut Vec<u8>) {
-    let mut state = StrState { level: 0, sm, buf };
+    let mut state = PrintState { level: 0, sm, buf };
     print_tree(tree, &mut state);
 }
 
-pub trait PrintState {
-    fn indent(&mut self);
-    fn outdent(&mut self);
-    fn uname(&self, sym: Symbol) -> String;
-    fn println(&mut self, text: &str);
-}
-
-struct StrState<'l> {
+struct PrintState<'l, W: Write> {
     level: u32,
     sm: &'l SymbolMaker,
-    buf: &'l mut Vec<u8>
+    buf: W
 }
 
-impl<'l> PrintState for StrState<'l> {
-    fn indent(&mut self) { self.level += 1 }
-    fn outdent(&mut self) { self.level -= 1 }
+impl<'l, W: Write> PrintState<'l, W> {
     fn uname(&self, sym: Symbol) -> String { self.sm.uname(sym) }
     fn println(&mut self, text: &str) {
         writeln!(self.buf, "{}{}", "  ".repeat(self.level as usize), text)
             .expect("Write failed!")
     }
-}
-
-struct StdoutState<'l> {
-    level: u32,
-    sm: &'l SymbolMaker
-}
-
-impl<'l> PrintState for StdoutState<'l> {
-    fn indent(&mut self) { self.level += 1 }
-    fn outdent(&mut self) { self.level -= 1 }
-    fn uname(&self, sym: Symbol) -> String { self.sm.uname(sym) }
-    fn println(&mut self, text: &str) {
-        println!("{}{}", "  ".repeat(self.level as usize), text)
+    fn indent<F>(&mut self, f: F)
+        where F: FnOnce(&mut PrintState<W>) {
+        self.level += 1;
+        f(self);
+        self.level -= 1;
     }
 }
 
-fn print_tree(tree: &Tree, state: &mut dyn PrintState) {
-    macro_rules! scope {
-        ($block:block) => {
-            state.indent();
-            $block;
-            state.outdent();
-        };
-    }
-
+fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
     match tree {
         Tree::LetI(ImportDeclaration { path, body }) => {
             state.println(&format!("import {};", path));
@@ -70,22 +47,21 @@ fn print_tree(tree: &Tree, state: &mut dyn PrintState) {
         Tree::LetP(PrimStatement { name, typ, exp, body, label }) => {
             if *typ != Typ::Void {
                 if let Some(e) = exp {
+                    let tp = serialize_tp(typ, state);
+                    let op = serialize_op(e, state);
                     state.println(&format!("{} {} = {};",
-                        serialize_tp(typ, state),
-                        state.uname(*name),
-                        serialize_op(e, state)
+                        tp, state.uname(*name), op
                     ));
                 } else {
+                    let tp = serialize_tp(typ, state);
                     state.println(&format!("{} {};",
-                        serialize_tp(typ, state),
-                        state.uname(*name),
+                        tp, state.uname(*name),
                     ));
                 }
             } else {
                 if let Some(e) = exp {
-                    state.println(&format!("{};",
-                        serialize_op(e, state)
-                    ));
+                    let op = serialize_op(e, state);
+                    state.println(&format!("{};", op));
                 }
             }
             print_tree(body, state);
@@ -109,7 +85,7 @@ fn print_tree(tree: &Tree, state: &mut dyn PrintState) {
                 header.push_str(&throws.join(", "));
             }
             state.println(&format!("{} {{", header));
-            scope!({ body.as_ref().map(|b| print_tree(b, state)) });
+            body.as_ref().map(|b| state.indent(|s| print_tree(b, s)));
             state.println("}");
         },
         Tree::LetC(ClassDeclaration { name, members, methods, extends, body }) => {
@@ -118,55 +94,54 @@ fn print_tree(tree: &Tree, state: &mut dyn PrintState) {
                 header.push_str(&format!(" extends {}", &state.uname(*e)));
             }
             state.println(&format!("{} {{", header));
-            scope!({
-                for (sym, tp) in members {
-                    state.println(&format!("{} {};", serialize_tp(tp, state), state.uname(*sym)));
-                }
-                methods.iter().for_each(|method| print_tree(method, state));
-            });
+            for (sym, tp) in members {
+                let tp = serialize_tp(tp, state);
+                state.indent(|state| state.println(&format!("{} {};",
+                    tp, state.uname(*sym)),
+                ));
+            }
+            methods.iter().for_each(|method| state.indent(|state| print_tree(method, state)));
             state.println("}");
             print_tree(body, state);
         },
         Tree::LetE(_) => todo!(),
         Tree::Switch(SwitchStatement { arg, cases, default, body, label }) =>  {
-            state.println(
-                &format!("{}: switch ({}) {{",
-                state.uname(*label),
-                serialize_op(arg, state))
-            );
-            scope!({
+            let op = serialize_op(arg, state);
+            state.println(&format!("{}: switch ({}) {{",
+                state.uname(*label), op
+            ));
+            state.indent(|state| {
                 for (ops, tree) in cases {
                     for op in ops {
-                        state.println(&format!("case {}: ", serialize_op(op, state)));
+                        let sop = serialize_op(op, state);
+                        state.println(&format!("case {}: ", sop));
                     }
-                    scope!({ print_tree(tree, state) });
+                    state.indent(|state| print_tree(tree,state));
                 }
                 state.println("default: ");
-                if let Some(d) = default { scope!({ print_tree(d, state) }); } 
             });
+            default.as_ref().map(|d| state.indent(|state| print_tree(d, state)));
             state.println("}");
             print_tree(body, state);
         },
         Tree::Loop(LoopStatement { cond, lbody, body, label }) => {
-            state.println(&format!(
-                "{}: while ({}) {{",
-                state.uname(*label),
-                serialize_op(cond, state))
-            );
-            scope!({ lbody.as_ref().map(|t| print_tree(t, state)) });
+            let sop = serialize_op(cond, state);
+            state.println(&format!("{}: while ({}) {{",
+                state.uname(*label), sop
+            ));
+            lbody.as_ref().map(|t| state.indent(|state| print_tree(t, state)));
             state.println("}");
             print_tree(body, state);
         }
         Tree::If(IfStatement { cond, btrue, bfalse, body, label }) => {
-            state.println(
-                &format!("{}: if ({}) {{",
-                state.uname(*label),
-                serialize_op(cond, state))
-            );
-            scope!({ print_tree(btrue, state) });
+            let op = serialize_op(cond, state);
+            state.println(&format!("{}: if ({}) {{",
+                state.uname(*label), op
+            ));
+            state.indent(|state| print_tree(btrue, state));
             if bfalse.is_some() {
                 state.println("} else {");
-                scope!({ bfalse.as_ref().map(|x| print_tree(x, state)) });
+                bfalse.as_ref().map(|x| state.indent(|state| print_tree(x, state)));
             }
             state.println("}");
             print_tree(body, state);
@@ -174,7 +149,8 @@ fn print_tree(tree: &Tree, state: &mut dyn PrintState) {
         Tree::Try(_) => todo!(),
         Tree::Return(ReturnStatement { val }) => {
             if let Some(v) = val.as_ref() {
-                state.println(&format!("return {};", serialize_op(v, state)));
+                let op = serialize_op(v, state);
+                state.println(&format!("return {};", op));
             } else {
                 state.println("return;");
             }
@@ -186,7 +162,7 @@ fn print_tree(tree: &Tree, state: &mut dyn PrintState) {
             let mut buf = format!("{}: ", state.uname(*label));
             buf += "{";
             state.println(&buf);
-            scope!({ bbody.as_ref().map(|b| print_tree(b.as_ref(), state))});
+            bbody.as_ref().map(|b| state.indent(|state| print_tree(b.as_ref(), state)));
             state.println("}");
             print_tree(body, state);
         },
@@ -201,12 +177,36 @@ fn print_tree(tree: &Tree, state: &mut dyn PrintState) {
     }
 }
 
-fn serialize_op(op: &Operand, state: &dyn PrintState) -> String {
+fn serialize_array_initializer(init: &ArrayInitializer, state: &mut PrintState<'_, impl Write>) -> String {
+    let ArrayInitializer { tp, ops, dims } = init;
+    let exp = ops.iter().map(|item| match item.as_ref() {
+        ElementInitializer::Expr(exp) => serialize_op(exp, state),
+        ElementInitializer::ArrayInitializer(a) => serialize_array_initializer(a, state)
+    }).collect::<Vec<_>>()
+        .join(", ");
+    format!("{} {{ {} }}", serialize_tp(&tp, state), exp)
+}
+
+fn serialize_op(op: &Operand, state: &mut PrintState<'_, impl Write>) -> String {
     match op {
         Operand::Super => "super".to_string(),
         Operand::This => "this".to_string(),
         Operand::C(lit) => serialize_lit(lit),
         Operand::V(sym) => state.uname(*sym),
+        Operand::A(array) => match array {
+            ArrayExpression::Empty(aempty_box) => {
+                let ArrayEmpty { tp, ops, dims } = aempty_box.as_ref();
+                let exp = ops.iter().map(|item| format!("[{}]", serialize_op(item, state)))
+                    .collect::<Vec<_>>()
+                    .join("");
+                format!(
+                    "{}{}{}", serialize_tp(&tp, state), exp,
+                    "[]".repeat(dims - ops.len())
+                )
+            }
+            ArrayExpression::Initializer(initial_box) =>
+                serialize_array_initializer(initial_box.as_ref(), state)
+        },
         Operand::T(ExprTree { op, args }) => {
             use Operation::*;
             // Probably factor this out eventually.
@@ -249,6 +249,9 @@ fn serialize_op(op: &Operand, state: &dyn PrintState) -> String {
                         .map(|arg| serialize_op(arg, state))
                         .collect::<Vec<_>>()
                         .join(", ")
+                ),
+                ArrayNew if args.len() == 1 => format!("new {}", 
+                    serialize_op(&args[0], state)
                 ),
                 Call if args.len() >= 2 => format!("{}.{}({})",
                     serialize_op(&args[0], state),
@@ -322,6 +325,7 @@ fn serialize_operator(operator: Operation) -> &'static str {
         Ternary => "ternary",
         Access => "access",
         New => "new",
+        ArrayNew => "new",
         Call => "call"
     }
 
@@ -342,7 +346,7 @@ fn serialize_lit(lit: &Literal) -> String {
     }
 }
 
-fn serialize_tp(tp: &Typ, state: &dyn PrintState) -> Cow<'static, str> {
+fn serialize_tp(tp: &Typ, state: &mut PrintState<'_, impl Write>) -> Cow<'static, str> {
     use Typ as T;
     use Cow::Borrowed as B;
     use Cow::Owned as O;

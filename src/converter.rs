@@ -890,8 +890,8 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
             node.child_by_field_name("type_arguments").map(|_| panic!("Templates not supported!"));
             // TODO: this is bad, it's a basic feature and you will need this for inlining extended classes.
             node.child(2).map(|x| if x.kind() == "super" { panic!("Super not supported in invocation (yet)!") });
+            
             let (obj, obj_type) = type_expression(node.child_by_field_name("object").expect(""), state);
-
             let fname = state.tsret.get_field_text(&node, "name");
             let fsym = obj_type.and_then(|x| {
                 if let Typ::Class(csym) = x {
@@ -905,13 +905,70 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
             (O::T(ExprTree { op: Operation::Call, args }), state.type_map.get(&fsym).cloned())
         },
         "method_reference" => panic!("Method references are not supported!"),
-        "array_creation_expression" => todo!(),
+        "array_creation_expression" => {
+            let dne = || panic!("Array child node does not exist");
+            node.child(1).map(|x| x.kind() == "@").map_or_else(dne,
+                |result| { if result { panic!("Annotations are not supported!"); }
+            });
+
+            let mut ndims = 0;
+            let mut args = Vec::new();
+            let dim_node = state.tsret.get_field(&node, "dimensions");
+            let mut cursor = dim_node.walk();
+            loop {
+                let node = cursor.node();
+                if let Some(f) = cursor.field_name() { if f == "value" { break }};
+                match node.kind() {
+                    "@" => panic!("Annotations are not supported!"),
+                    "[" => (),
+                    "]" => ndims += 1,
+                    _ => args.push(expression(node, state))
+                }
+                if !cursor.goto_next_sibling() { break }
+            }
+
+            
+            let eltype = Box::new(state.get_typ(&node));
+            let tp = Typ::Array(ArrayTyp { eltype, dims: ndims });
+            let value_node = node.child_by_field_name("value");
+            let op = if let Some(vnode) = value_node {
+                O::A(ArrayExpression::Initializer(
+                    Box::new(parse_array_initializer(vnode, state)
+                )))
+            } else {
+                O::A(ArrayExpression::Empty(Box::new(ArrayEmpty {
+                    tp: tp.clone(), ops: args, dims: ndims as usize
+                })))
+            };
+            return (op, Some(tp))
+        },
         "template_expression" => panic!("Template expressions are not supported yet."),
 
         // _reserved_identifier
         "open" | "module" | "record" | "with" | "yield" | "seal" => panic!("Reserved Identifiers are not supported!"),
         other => panic!("Unknown Expression Type: {}", other)
     }
+}
+
+fn parse_array_initializer(node: Node, state: &mut State) -> ArrayInitializer {
+    let mut res = Vec::new();
+    let mut cursor = node.walk();
+    loop {
+        let cur = cursor.node();
+        match cur.kind() {
+            "{" | "}" | "," => (),
+            "array_initializer" => res.push(ElementInitializer::ArrayInitializer(
+                parse_array_initializer(cur, state))
+            ),
+            _ => res.push(ElementInitializer::Expr(expression(node, state)))
+        }
+        if !cursor.goto_next_sibling() { break }
+    }
+    return ArrayInitializer {
+        tp: todo!(),
+        ops: todo!(),
+        dims: todo!(),
+    };
 }
 
 fn parse_args(node: Node, state: &mut State) -> Vec<Operand> {

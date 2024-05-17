@@ -109,6 +109,7 @@ fn operand(op: &Operand, state: &mut CheckState) {
             },
             _ => { args.iter().for_each(|arg| operand(arg, state)); }
         }
+        other => todo!()
     }
 }
 

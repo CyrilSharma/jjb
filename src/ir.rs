@@ -26,6 +26,32 @@ pub struct ArrayTyp {
 }
 
 #[derive(Clone, Debug)]
+pub enum ArrayExpression {
+    Empty(Box<ArrayEmpty>),
+    Initializer(Box<ArrayInitializer>)
+}
+
+#[derive(Clone, Debug)]
+pub struct ArrayEmpty {
+    pub tp: Typ,
+    pub ops: Vec<Operand>,
+    pub dims: usize
+}
+
+#[derive(Clone, Debug)]
+pub enum ElementInitializer {
+    Expr(Operand),
+    ArrayInitializer(ArrayInitializer)
+}
+
+#[derive(Clone, Debug)]
+pub struct ArrayInitializer {
+    pub tp: Typ,
+    pub ops: Vec<Box<ElementInitializer>>,
+    pub dims: u32
+}
+
+#[derive(Clone, Debug)]
 pub enum Literal {
     Null,
     Bool(bool),
@@ -92,6 +118,7 @@ pub enum Operation {
 
     // Custom
     New,
+    ArrayNew,
     Call,
     Phi,
     Assert,
@@ -108,6 +135,8 @@ pub enum Operation {
  */
 
 
+// Refactor to just use linked lists...
+// It's so much easier I really should have thought this through.
 // Note: there's no need for classes and imports to have body statements.
 // Similar to functions, we can just have a top level list of these things in Program.
 type TreeRef = Box<Tree>;
@@ -147,7 +176,8 @@ pub enum Operand {
     Super,
     C(Literal),
     V(Symbol),
-    T(ExprTree)
+    T(ExprTree),
+    A(ArrayExpression)
 }
 
 #[derive(Clone, Debug)]
