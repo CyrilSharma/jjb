@@ -829,14 +829,16 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
 
             let mut ndims: u8 = 0;
             let mut args = Vec::new();
-            let dim_node = state.tsret.get_field(&node, "dimensions");
-            let mut cursor = dim_node.walk();
-            for child in dim_node.children(&mut cursor) {
-                match child.kind() {
-                    "@" => panic!("Annotations are not supported!"),
-                    "[" => (),
-                    "]" => ndims += 1,
-                    _ => args.push(expression(child, state))
+            let mut cursor = node.walk();
+            for dim_node in node.children_by_field_name("dimensions", &mut cursor) {
+                let mut cursor = dim_node.walk();
+                for child in dim_node.children(&mut cursor) {
+                    match child.kind() {
+                        "@" => panic!("Annotations are not supported!"),
+                        "[" => (),
+                        "]" => ndims += 1,
+                        _ => args.push(expression(child, state))
+                    }
                 }
             }
             

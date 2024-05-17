@@ -32,8 +32,7 @@ fn main() {
     import java.util.Scanner;
     class Test {
         public static void main(String[] args) {
-            // int[] x = new int[] { 0, 1, 2 };
-            int[] array = new int[10] { 0, 1, 2, 3, 4, 5 };
+            int[][][][] a = new int[10][100][][];
         }
     }
     "#;
@@ -42,6 +41,7 @@ fn main() {
     parser.set_language(&tree_sitter_java::language()).expect("Error loading Java grammar");
     let tree = parser.parse(source, None).unwrap();
     print_tree(tree.walk(), 0);
+    println!("{}", tree.root_node());
     let mut sm = SymbolMaker::new();
     let ast = convert(tree.root_node(), source.as_bytes(), &mut sm);
 }
