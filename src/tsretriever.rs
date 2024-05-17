@@ -31,6 +31,20 @@ impl<'l> TsRetriever<'l> {
             .utf8_text(self.source)
             .unwrap_or_else(|_| panic!("Field '{}' contains invalid UTF-8", field_name))
     }
+
+    pub fn get_dims(&self, dim_node: &Node) -> u8 {
+        let mut ndims = 0;
+        let mut cursor = dim_node.walk();
+        for child in dim_node.children(&mut cursor) {
+            match child.kind() {
+                "@" => panic!("Annotations are not supported!"),
+                "[" => (),
+                "]" => ndims += 1,
+                other => panic!("Unknown Character {} Found in Dimensions!", other)
+            }
+        }
+        ndims
+    }
     
     pub fn get_op(&self, node: &Node) -> Operation {
         use Operation as O;

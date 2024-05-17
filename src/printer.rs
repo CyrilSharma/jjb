@@ -167,13 +167,13 @@ fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
 }
 
 fn serialize_array_initializer(init: &ArrayInitializer, state: &mut PrintState<'_, impl Write>) -> String {
-    let ArrayInitializer { tp, ops, dims } = init;
+    let ArrayInitializer { ops, dims } = init;
     let exp = ops.iter().map(|item| match item.as_ref() {
         ElementInitializer::Expr(exp) => serialize_op(exp, state),
         ElementInitializer::ArrayInitializer(a) => serialize_array_initializer(a, state)
     }).collect::<Vec<_>>()
         .join(", ");
-    format!("{} {{ {} }}", serialize_tp(&tp, state), exp)
+    format!("{{ {} }}", exp)
 }
 
 fn serialize_op(op: &Operand, state: &mut PrintState<'_, impl Write>) -> String {
@@ -183,18 +183,23 @@ fn serialize_op(op: &Operand, state: &mut PrintState<'_, impl Write>) -> String 
         Operand::C(lit) => serialize_lit(lit),
         Operand::V(sym) => state.uname(*sym),
         Operand::A(array) => match array {
-            ArrayExpression::Empty(aempty_box) => {
-                let ArrayEmpty { tp, ops, dims } = aempty_box.as_ref();
+            ArrayExpression::Empty(tp, aempty_box) => {
+                let el_tp = if let Typ::Array(ArrayTyp { eltype, dims }) = tp { eltype } else {
+                    panic!("Invalid Array")
+                };
+                let ArrayEmpty { ops, dims } = aempty_box.as_ref();
                 let exp = ops.iter().map(|item| format!("[{}]", serialize_op(item, state)))
                     .collect::<Vec<_>>()
                     .join("");
                 format!(
-                    "{}{}{}", serialize_tp(&tp, state), exp,
-                    "[]".repeat(dims - ops.len())
+                    "new {}{}{}", serialize_tp(&el_tp, state), exp,
+                    "[]".repeat((*dims as usize) - ops.len())
                 )
             }
-            ArrayExpression::Initializer(initial_box) =>
+            ArrayExpression::Initializer(tp, initial_box) => format!("new {}{}",
+                serialize_tp(&tp, state),
                 serialize_array_initializer(initial_box.as_ref(), state)
+            )
         },
         Operand::T(ExprTree { op, args }) => {
             use Operation::*;
@@ -254,7 +259,10 @@ fn serialize_op(op: &Operand, state: &mut PrintState<'_, impl Write>) -> String 
                     serialize_op(&args[0], state),
                     serialize_op(&args[1], state)
                 ),
-                Index => todo!(),
+                Index if args.len() == 2 => format!("{}[{}]",
+                    serialize_op(&args[0], state),
+                    serialize_op(&args[1], state)
+                ),
                 operator => panic!(
                     "Unhandled Operator {} with nargs: {}",
                     serialize_operator(*operator), args.len()

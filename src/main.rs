@@ -31,14 +31,9 @@ fn main() {
     let source = r#"
     import java.util.Scanner;
     class Test {
-        int y;
-        int double(int x, int z) throws Exception {
-            if (x == 2) {
-                return 1;
-            } else {
-                return 2;
-            }
-            return x * 2;
+        public static void main(String[] args) {
+            // int[] x = new int[] { 0, 1, 2 };
+            int[] array = new int[10] { 0, 1, 2, 3, 4, 5 };
         }
     }
     "#;
@@ -46,6 +41,7 @@ fn main() {
     let mut parser = Parser::new();
     parser.set_language(&tree_sitter_java::language()).expect("Error loading Java grammar");
     let tree = parser.parse(source, None).unwrap();
+    print_tree(tree.walk(), 0);
     let mut sm = SymbolMaker::new();
     let ast = convert(tree.root_node(), source.as_bytes(), &mut sm);
 }

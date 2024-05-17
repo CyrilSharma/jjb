@@ -25,15 +25,14 @@ pub struct ArrayTyp {
 
 #[derive(Clone, Debug)]
 pub enum ArrayExpression {
-    Empty(Box<ArrayEmpty>),
-    Initializer(Box<ArrayInitializer>)
+    Empty(Typ, Box<ArrayEmpty>),
+    Initializer(Typ, Box<ArrayInitializer>)
 }
 
 #[derive(Clone, Debug)]
 pub struct ArrayEmpty {
-    pub tp: Typ,
     pub ops: Vec<Operand>,
-    pub dims: usize
+    pub dims: u8
 }
 
 #[derive(Clone, Debug)]
@@ -44,9 +43,8 @@ pub enum ElementInitializer {
 
 #[derive(Clone, Debug)]
 pub struct ArrayInitializer {
-    pub tp: Typ,
     pub ops: Vec<Box<ElementInitializer>>,
-    pub dims: u32
+    pub dims: u8
 }
 
 #[derive(Clone, Debug)]

@@ -456,19 +456,26 @@ method_test!(block_1, r#"
     }
 "#);
 
-method_test!(switch_3, r#"
-    int cnt = 0;
-    int i = 0;
-    while (cnt++ < 50) {
-        switch (cnt % 5) {
-            case 0: do { i++; cnt++; } while (i < 5);
-            case 1: do { i++; cnt++; } while (i < 10);
-            case 2: do { i++; cnt++; } while (i < 20);
-            case 3: do { i++; cnt++; } while (i < 25);
-            case 4: do { i++; cnt++; } while (i < 30);
-        }
+method_test!(array_1, r#"
+    int[] vars = new int[10];
+    for (int i = 0; i < vars.length; i++) {
+        System.out.print(vars[i]);
     }
-    System.out.println(cnt);
+
+    int[] array = new int[] { 0, 1, 2, 3, 4, 5 };
+    for (int i = 0; i < array.length; i++) {
+        System.out.print(array[i]);
+    }
+"#);
+
+method_test!(array_2, r#"
+    int[][][][] a = new int[10][100][][];
+    int[][] b = new int[][] { 
+        { 0, 1, 2 },
+        new int[5],
+        { 5, 6, 8 }
+     };
+    int c[][], d[];
 "#);
 
 classes_test!(obj1, r#"

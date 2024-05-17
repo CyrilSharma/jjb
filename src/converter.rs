@@ -99,19 +99,10 @@ impl<'l> State<'l> {
 
             "array_type" => {
                 let eltyp = self.get_typ_raw(&self.tsret.get_field(&typ_node, "element"));
-                let mut ndims = 0;
-                let dim_node = self.tsret.get_field(&typ_node, "dimensions");
-                let mut dim_cursor = dim_node.walk();
-                for child in dim_node.children(&mut dim_cursor) {
-                    match self.tsret.get_text(&child) {
-                        "]" => ndims += 1,
-                        _ => ()
-                    }
-                }
-                Typ::Array(ArrayTyp {
-                    eltype: Box::new(eltyp),
-                    dims: ndims
-                })
+                let dims = self.tsret.get_dims(
+                    &self.tsret.get_field(&typ_node, "dimensions")
+                );
+                Typ::Array(ArrayTyp { eltype: Box::new(eltyp), dims })
             },
 
             "type_identifier" => {
@@ -548,6 +539,7 @@ fn for_statement(node: Node, state: &mut State) -> TreeContainer {
         })
     };
 
+    state.scope_in();
     let mut res = LinkedList::new();
     let fchild = state.tsret.get_field(&node, "init");
     if fchild.kind() == "local_variable_declaration" {
@@ -584,6 +576,7 @@ fn for_statement(node: Node, state: &mut State) -> TreeContainer {
     lbody = tail(lbody, Tree::Continue(loop_label));
     let cond = expression(state.tsret.get_field(&node, "condition"), state);
     res.push_back(Tree::Loop(LoopStatement { cond, label: loop_label, lbody, dowhile: false }));
+    state.scope_out();
     res
 }
 
@@ -612,12 +605,20 @@ fn local_variable_declaration(node: Node, state: &mut State) -> TreeContainer {
         syms.push(name_sym);
         exps.push(exp);
         state.var_scope.insert(name_str, name_sym);
-        state.type_map.insert(name_sym, tp.clone());
+        let dim_res = cur.child_by_field_name("dimensions");
+        let el_tp = if let Some(dim_cur) = dim_res {
+            Typ::Array(ArrayTyp {
+                eltype: Box::new(tp.clone()),
+                dims: state.tsret.get_dims(&dim_cur)
+            })
+        } else {
+            tp.clone()
+        };
+        state.type_map.insert(name_sym, el_tp);
         if let Some(nbr) = cur.next_named_sibling() {
             cur = nbr;
             continue;
         }
-        // TODO dimensions, for when we declare arrays...
         break;
     };
 
@@ -826,34 +827,30 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
                 |result| { if result { panic!("Annotations are not supported!"); }
             });
 
-            let mut ndims = 0;
+            let mut ndims: u8 = 0;
             let mut args = Vec::new();
             let dim_node = state.tsret.get_field(&node, "dimensions");
             let mut cursor = dim_node.walk();
-            loop {
-                let node = cursor.node();
-                if let Some(f) = cursor.field_name() { if f == "value" { break }};
-                match node.kind() {
+            for child in dim_node.children(&mut cursor) {
+                match child.kind() {
                     "@" => panic!("Annotations are not supported!"),
                     "[" => (),
                     "]" => ndims += 1,
-                    _ => args.push(expression(node, state))
+                    _ => args.push(expression(child, state))
                 }
-                if !cursor.goto_next_sibling() { break }
             }
-
             
             let eltype = Box::new(state.get_typ(&node));
             let tp = Typ::Array(ArrayTyp { eltype, dims: ndims });
             let value_node = node.child_by_field_name("value");
             let op = if let Some(vnode) = value_node {
                 O::A(ArrayExpression::Initializer(
-                    Box::new(parse_array_initializer(vnode, state)
+                    tp.clone(), Box::new(parse_array_initializer(vnode, state)
                 )))
             } else {
-                O::A(ArrayExpression::Empty(Box::new(ArrayEmpty {
-                    tp: tp.clone(), ops: args, dims: ndims as usize
-                })))
+                O::A(ArrayExpression::Empty(
+                    tp.clone(), Box::new(ArrayEmpty { ops: args, dims: ndims })
+                ))
             };
             return (op, Some(tp))
         },
@@ -866,24 +863,19 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
 }
 
 fn parse_array_initializer(node: Node, state: &mut State) -> ArrayInitializer {
-    let mut res = Vec::new();
+    let mut ops = Vec::new();
     let mut cursor = node.walk();
-    loop {
-        let cur = cursor.node();
-        match cur.kind() {
+    for child in node.children(&mut cursor) {
+        match child.kind() {
             "{" | "}" | "," => (),
-            "array_initializer" => res.push(ElementInitializer::ArrayInitializer(
-                parse_array_initializer(cur, state))
-            ),
-            _ => res.push(ElementInitializer::Expr(expression(node, state)))
+            "array_initializer" => ops.push(Box::new(ElementInitializer::ArrayInitializer(
+                parse_array_initializer(child, state))
+            )),
+            _ => ops.push(Box::new(ElementInitializer::Expr(expression(child, state))))
         }
-        if !cursor.goto_next_sibling() { break }
     }
-    return ArrayInitializer {
-        tp: todo!(),
-        ops: todo!(),
-        dims: todo!(),
-    };
+    let dims = ops.len() as u8;
+    return ArrayInitializer { ops, dims };
 }
 
 fn parse_args(node: Node, state: &mut State) -> Vec<Operand> {
