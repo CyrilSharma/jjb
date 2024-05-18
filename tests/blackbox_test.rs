@@ -1,7 +1,9 @@
 use std::fs::{self, write};
 use std::process::Command;
 use jjb::printer::print;
+use jjb::hoist::hoist;
 use jjb::{converter::convert, ir::Tree, printer::str_print, symbolmaker::SymbolMaker};
+use jjb::typeinfer::typeinfer;
 use tree_sitter::Parser;
 
 macro_rules! method_test {
@@ -69,6 +71,11 @@ fn read_cache(fname: &str) -> Result<String, std::io::Error> {
     fs::read_to_string(cache_path)
 }
 
+fn purge_cache(fname: &str) {
+    let cache_path = format!("{}_cache.txt", fname);
+    stash(&cache_path, "");
+}
+
 fn _run(fname: &str, text: &str) -> String {
     stash(fname, text);
     compile(&fname);
@@ -111,7 +118,9 @@ fn test(name: &str, source: &str, compile: &str) {
     parser.set_language(&tree_sitter_java::language()).expect("Error loading Java grammar");
     let tree = parser.parse(compile, None).unwrap();
     let mut sm = SymbolMaker::new();
-    let ast = convert(tree.root_node(), compile.as_bytes(), &mut sm);
+    let mut ast = convert(tree.root_node(), compile.as_bytes(), &mut sm);
+    ast = hoist(ast.as_ref(), &mut sm);
+    typeinfer(ast.as_mut(), &mut sm);
     test_equal(source, compile, &ast, &sm, name)
     // The other phases will come here...
 }

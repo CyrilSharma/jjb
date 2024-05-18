@@ -92,7 +92,7 @@ fn operand(op: &Operand, state: &mut CheckState) {
                     _ => assert!(false, "Invalid Call operation!")
                 };
             }
-            jjb::ir::Operation::Call => {
+            jjb::ir::Operation::InvokeStatic | jjb::ir::Operation::InvokeVirtual => {
                 match args[1] {
                     Operand::V(sym) => inc(&mut state.fun_apps, sym),
                     _ => assert!(false, "Invalid Call operation!")

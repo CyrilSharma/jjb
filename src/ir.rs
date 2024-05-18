@@ -1,8 +1,10 @@
-use std::collections::LinkedList;
+use std::fmt;
+use crate::container::Container;
 use crate::symbolmaker::Symbol;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Typ {
+    Unknown,
     Void,
     Bool,
     Char,
@@ -13,8 +15,39 @@ pub enum Typ {
     Float,
     Double,
     Str,
-    Array(ArrayTyp),
+    Array(ArrayTyp), // I want this to be a symbol too...
     Class(Symbol)
+}
+
+// TODO: TypTree, and then we can replace all types with symbols!
+// pub enum TypTree {
+//     Unknown,
+//     Void,
+//     Bool,
+//     Char,
+//     Byte,
+//     Int,
+//     Short,
+//     Long,
+//     Float,
+//     Double,
+//     Str,
+//     Array(ArrayTyp), // I want this to be a symbol too...
+//     Class(Symbol)
+// }
+
+impl Typ {
+    pub fn intrank(&self) -> u8 {
+        use Typ as T;
+        match self {
+            T::Byte => 1,
+            T::Char => 2,
+            T::Int => 3,
+            T::Short => 4,
+            T::Long => 5,
+            _ => 0
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -43,8 +76,7 @@ pub enum ElementInitializer {
 
 #[derive(Clone, Debug)]
 pub struct ArrayInitializer {
-    pub ops: Vec<Box<ElementInitializer>>,
-    pub dims: u8
+    pub ops: Vec<Box<ElementInitializer>>
 }
 
 #[derive(Clone, Debug)]
@@ -59,6 +91,23 @@ pub enum Literal {
     Float(f32),
     Double(f64),
     String(String)
+}
+
+impl fmt::Display for Literal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", match self {
+            Literal::Null => "null".to_string(),
+            Literal::Bool(b) => b.to_string(), 
+            Literal::Char(c) => c.to_string(),
+            Literal::Byte(b) => b.to_string(),
+            Literal::Int(i) => i.to_string(),
+            Literal::Short(s) => s.to_string(),
+            Literal::Long(l) => l.to_string(),
+            Literal::Float(f) => f.to_string(),
+            Literal::Double(d) => d.to_string(),
+            Literal::String(s) => s.clone()
+        })
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -115,7 +164,8 @@ pub enum Operation {
     // Custom
     New,
     ArrayNew,
-    Call,
+    InvokeVirtual,
+    InvokeStatic,
     Phi,
     Assert,
     Access,
@@ -130,7 +180,9 @@ pub enum Operation {
  * Easy to unroll (high-level structures are kept).
  */
 
-pub type TreeContainer = LinkedList<Tree>;
+pub type TreeContainer = Container<Tree>;
+
+#[derive(Clone)]
 pub enum Tree {
     Program(TreeContainer),
     LetI(ImportDeclaration),
@@ -149,11 +201,13 @@ pub enum Tree {
     EntryPoint(Symbol)
 }
 
+#[derive(Clone)]
 pub struct BlockStatement {
     pub label: Symbol,
     pub bbody: TreeContainer
 }
 
+#[derive(Clone)]
 pub struct ImportDeclaration {
     pub path: String
 }
@@ -174,12 +228,14 @@ pub struct ExprTree {
     pub args: Vec<Operand>
 }
 
+#[derive(Clone)]
 pub struct PrimStatement {
     pub name: Symbol,
     pub typ: Typ,
     pub exp: Option<Operand>
 }
 
+#[derive(Clone)]
 pub struct FunDeclaration {
     pub name: Symbol,
     pub args: Vec<(Symbol, Typ)>,
@@ -189,6 +245,7 @@ pub struct FunDeclaration {
     pub body: TreeContainer
 }
 
+#[derive(Clone)]
 pub struct ClassDeclaration {
     pub name: Symbol,
     pub members: Vec<(Symbol, Typ)>,
@@ -200,12 +257,14 @@ pub struct ClassDeclaration {
 }
 
 // We don't have support for more complicated enums, yet
+#[derive(Clone)]
 pub struct EnumDeclaration {
     pub name: Symbol,
     pub members: Vec<Symbol>,
     pub values: Option<Vec<Literal>>
 }
 
+#[derive(Clone)]
 pub struct SwitchStatement {
     pub arg: Operand,
     pub label: Symbol,
@@ -215,6 +274,7 @@ pub struct SwitchStatement {
 
 // TODO: Special flag for do-while to avoid lots of edge cases.
 // All other loops will be translated into this.
+#[derive(Clone)]
 pub struct LoopStatement {
     pub cond: Operand,
     pub label: Symbol,
@@ -222,6 +282,7 @@ pub struct LoopStatement {
     pub dowhile: bool
 }
 
+#[derive(Clone)]
 pub struct IfStatement {
     pub cond: Operand,
     pub label: Symbol,
@@ -229,6 +290,7 @@ pub struct IfStatement {
     pub bfalse: TreeContainer
 }
 
+#[derive(Clone)]
 pub struct TryStatement {
     pub main: TreeContainer,
     pub label: Symbol,
@@ -238,6 +300,7 @@ pub struct TryStatement {
     pub finally: TreeContainer
 }
 
+#[derive(Clone)]
 pub struct ReturnStatement {
     pub val: Option<Operand>
 }

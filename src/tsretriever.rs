@@ -91,13 +91,21 @@ impl<'l> TsRetriever<'l> {
     
     pub fn get_lit(&self, node: &Node) -> Literal {
         use Literal::*;
+        let parse_int = |var: &str| {
+            if var.ends_with("L") { return Long(var[0..var.len()-1].parse().expect("")) }
+            else { return Int(var[0..var.len()].parse().expect("")) }
+        };
+        let parse_float = |var: &str| {
+            if var.ends_with("L") { return Double(var[0..var.len()-1].parse().expect("")) }
+            else { return Float(var[0..var.len()].parse().expect("")) }
+        };
         match node.kind() {
-            "decimal_integer_literal" => Long(self.parse_text(&node)),
-            "hex_integer_literal" => Long(self.parse_text(&node)),
-            "octal_integer_literal" => Long(self.parse_text(&node)),
-            "binary_integer_literal" => Long(self.parse_text(&node)),
-            "decimal_floating_point_literal" => Double(self.parse_text(&node)),
-            "hex_floating_point_literal" => Long(self.parse_text(&node)),
+            "decimal_integer_literal" => parse_int(&self.get_text(node)),
+            "hex_integer_literal" => parse_int(&self.get_text(node)),
+            "octal_integer_literal" => parse_int(&self.get_text(node)),
+            "binary_integer_literal" => parse_int(&self.get_text(node)),
+            "decimal_floating_point_literal" => parse_float(&self.get_text(node)),
+            "hex_floating_point_literal" => parse_float(&self.get_text(node)),
             "true" => Bool(true),
             "false" => Bool(false),
             "character_literal" => Char(self.parse_text(&node)),

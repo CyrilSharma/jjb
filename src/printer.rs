@@ -167,7 +167,7 @@ fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
 }
 
 fn serialize_array_initializer(init: &ArrayInitializer, state: &mut PrintState<'_, impl Write>) -> String {
-    let ArrayInitializer { ops, dims } = init;
+    let ArrayInitializer { ops } = init;
     let exp = ops.iter().map(|item| match item.as_ref() {
         ElementInitializer::Expr(exp) => serialize_op(exp, state),
         ElementInitializer::ArrayInitializer(a) => serialize_array_initializer(a, state)
@@ -180,7 +180,7 @@ fn serialize_op(op: &Operand, state: &mut PrintState<'_, impl Write>) -> String 
     match op {
         Operand::Super => "super".to_string(),
         Operand::This => "this".to_string(),
-        Operand::C(lit) => serialize_lit(lit),
+        Operand::C(lit) => format!("{}", lit),
         Operand::V(sym) => state.uname(*sym),
         Operand::A(array) => match array {
             ArrayExpression::Empty(tp, aempty_box) => {
@@ -247,7 +247,7 @@ fn serialize_op(op: &Operand, state: &mut PrintState<'_, impl Write>) -> String 
                 ArrayNew if args.len() == 1 => format!("new {}", 
                     serialize_op(&args[0], state)
                 ),
-                Call if args.len() >= 2 => format!("{}.{}({})",
+                InvokeVirtual | InvokeVirtual if args.len() >= 2 => format!("{}.{}({})",
                     serialize_op(&args[0], state),
                     serialize_op(&args[1], state),
                     args[2..].iter()
@@ -323,24 +323,10 @@ fn serialize_operator(operator: Operation) -> &'static str {
         Access => "access",
         New => "new",
         ArrayNew => "new",
-        Call => "call"
+        InvokeStatic => "invoke_static",
+        InvokeVirtual => "invoke_virtual",
     }
 
-}
-
-fn serialize_lit(lit: &Literal) -> String {
-    match lit {
-        Literal::Null => "null".to_string(),
-        Literal::Bool(b) => b.to_string(), 
-        Literal::Char(c) => c.to_string(),
-        Literal::Byte(b) => b.to_string(),
-        Literal::Int(i) => i.to_string(),
-        Literal::Short(s) => s.to_string(),
-        Literal::Long(l) => l.to_string(),
-        Literal::Float(f) => f.to_string(),
-        Literal::Double(d) => d.to_string(),
-        Literal::String(s) => s.clone()
-    }
 }
 
 fn serialize_tp(tp: &Typ, state: &mut PrintState<'_, impl Write>) -> Cow<'static, str> {
@@ -348,6 +334,7 @@ fn serialize_tp(tp: &Typ, state: &mut PrintState<'_, impl Write>) -> Cow<'static
     use Cow::Borrowed as B;
     use Cow::Owned as O;
     match tp {
+        T::Unknown => B("unknown"),
         T::Void => B("void"),
         T::Bool => B("boolean"),
         T::Char => B("char"),

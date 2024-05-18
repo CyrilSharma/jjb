@@ -22,6 +22,11 @@ impl SymbolMaker {
         Symbol { id: self.names.len() - 1 }
     }
 
+    pub fn refresh(&mut self, sym: &Symbol) -> Symbol {
+        self.names.push(self.names[sym.id].clone());
+        Symbol { id: self.names.len() - 1 }
+    }
+
     pub fn name(&self, sym: Symbol) -> &str {
         match &self.names[sym.id as usize] {
             NameType::Known(s) => s,

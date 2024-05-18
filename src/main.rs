@@ -5,6 +5,11 @@ mod scope;
 mod printer;
 mod symbolmaker;
 mod directory;
+mod hoist;
+mod container;
+mod typeinfer;
+use typeinfer::typeinfer;
+use hoist::hoist;
 use converter::convert;
 use symbolmaker::SymbolMaker;
 use tree_sitter::{Parser, TreeCursor};
@@ -43,5 +48,7 @@ fn main() {
     print_tree(tree.walk(), 0);
     println!("{}", tree.root_node());
     let mut sm = SymbolMaker::new();
-    let ast = convert(tree.root_node(), source.as_bytes(), &mut sm);
+    let mut ast = convert(tree.root_node(), source.as_bytes(), &mut sm);
+    ast = hoist(ast.as_ref(), &mut sm);
+    typeinfer(ast.as_mut(), &mut sm);
 }

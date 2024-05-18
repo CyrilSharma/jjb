@@ -1,7 +1,7 @@
 // https://github.com/tree-sitter/tree-sitter-java/blob/master/grammar.js
 // We parse a subset of the above grammar.
 
-use std::collections::{HashMap, LinkedList};
+use std::collections::HashMap;
 use crate::directory::Directory;
 use crate::ir::*;
 use crate::symbolmaker::{Symbol, SymbolMaker};
@@ -128,12 +128,6 @@ impl<'l> State<'l> {
     }
 }
 
-pub fn make_list(t: Tree) -> TreeContainer {
-    let mut temp = LinkedList::new();
-    temp.push_back(t);
-    temp
-}
-
 pub fn convert(root: Node, source: &[u8], sm: &mut SymbolMaker) -> Box<Tree> {
     assert!(root.kind() == "program");
     let mut state = State::new(source, sm);
@@ -195,9 +189,9 @@ fn add_declarations<'l>(root: Node, state: &mut State, entry_name: &'l str) -> S
 
 fn statements(node: Node, state: &mut State) -> TreeContainer {
     let mut cur = node;
-    let mut res = LinkedList::new();
+    let mut res = TreeContainer::new();
     loop {
-        res.append(&mut statement(cur, state));
+        res.append(statement(cur, state));
         if let Some(nxt) = cur.next_named_sibling() {
             cur = nxt;
             continue;
@@ -221,15 +215,15 @@ fn tail(mut container: TreeContainer, el: Tree) -> TreeContainer {
 
 /* ------ STATEMENTS ------ */
 fn statement(node: Node, state: &mut State) -> TreeContainer {
-    const EMPTY: TreeContainer = LinkedList::new();
+    let empty: TreeContainer = TreeContainer::new();
     match node.kind() {
         /* ------ TOP-LEVEL DECLARATIONS -------- */
         "module_declaration" => panic!("Modules are not supported!"),
-        "package_declaration" => EMPTY /* packages are inlined */,
+        "package_declaration" => empty /* packages are inlined */,
         "import_declaration" => import_declaration(node, state),
         "class_declaration" => class_declaration(node, state),
         "record_declaration" => panic!("Records are not supported!"),
-        "interface_declaration" => EMPTY /* interfaces are basically just type asserts */,
+        "interface_declaration" => empty /* interfaces are basically just type asserts */,
         "annotation_type_declaration" => panic!("Annotations are not supported!"),
         "enum_declaration" => enum_declaration(node, state),
 
@@ -241,19 +235,19 @@ fn statement(node: Node, state: &mut State) -> TreeContainer {
         "for_statement" => for_statement(node, state),
         "enhanced_for_statement" => todo!(),
         "block" => inline_block(node, state),
-        ";" => EMPTY,
+        ";" => empty,
         "assert_statement" => assert_statement(node, state),
         "do_statement" => while_statement(node, state, true),
         "break_statement" => break_statement(node, state),
         "continue_statement" => continue_statement(node, state),
-        "return_statement" => make_list(Tree::Return(ReturnStatement { 
+        "return_statement" => TreeContainer::make(Tree::Return(ReturnStatement { 
             val: node.named_child(0).map(|child| expression(child, state))
         })),
         "yield_statement" => panic!("Yield is unsupported!"),
         "switch_expression" => switch_statement(node, state),
         "synchronized_statement" => panic!("Synchronized is unsupported!"),
         "local_variable_declaration" => local_variable_declaration(node, state),
-        "throw_statement" => make_list(Tree::LetP(PrimStatement { 
+        "throw_statement" => TreeContainer::make(Tree::LetP(PrimStatement { 
             name: state.sm.fresh("temp"),
             typ: Typ::Void,
             exp: Some(Operand::T(ExprTree {
@@ -263,7 +257,7 @@ fn statement(node: Node, state: &mut State) -> TreeContainer {
         })),
         "try_statement" => todo!(),
         "try_with_resources_statement" => todo!(),
-        "line_comment" | "block_comment" => EMPTY,
+        "line_comment" | "block_comment" => empty,
         other => panic!("Unsupported statement {}!", other)
     }
 }
@@ -272,7 +266,7 @@ fn statement(node: Node, state: &mut State) -> TreeContainer {
 fn import_declaration(node: Node, state: &mut State) -> TreeContainer {
     let path = state.tsret.get_text(&node.named_child(0).expect("Invalid Import"));
     node.child(1).map(|x| if x.kind() == "static" { panic!("Static imports are not yet supported.") } );
-    return make_list(Tree::LetI(ImportDeclaration { path: path.to_string() }));
+    return TreeContainer::make(Tree::LetI(ImportDeclaration { path: path.to_string() }));
 }
 
 fn class_declaration(node: Node, state: &mut State) -> TreeContainer {
@@ -292,7 +286,7 @@ fn class_declaration(node: Node, state: &mut State) -> TreeContainer {
         .iter()
         .map(|x| (*x, state.type_map.get(x).expect("").clone()))
         .collect::<Vec<(Symbol, Typ)>>();
-    let mut methods = LinkedList::new();
+    let mut methods = TreeContainer::new();
     if let Some(body) = node.child_by_field_name("body") {
         state.scope_in();
         state.class_sym = Some(csym);
@@ -312,7 +306,7 @@ fn class_declaration(node: Node, state: &mut State) -> TreeContainer {
         state.class_sym = None;
         state.scope_out();
     }
-    return make_list(Tree::LetC(ClassDeclaration {
+    return TreeContainer::make(Tree::LetC(ClassDeclaration {
         name: csym,
         members,
         methods,
@@ -380,21 +374,21 @@ fn method_declaration(node: Node, state: &mut State, name: Symbol) -> Tree {
 }
 
 fn break_statement(node: Node, state: &mut State) -> TreeContainer {
-    make_list(Tree::Break(match state.tsret.get_text(&node.child(1).expect("")) {
+    TreeContainer::make(Tree::Break(match state.tsret.get_text(&node.child(1).expect("")) {
         ";" => state.break_label.expect("Loop was not labeled!"),
         ident => state.find_label(ident).expect("Unknown label")
     }))
 }
 
 fn continue_statement(node: Node, state: &mut State) -> TreeContainer {
-    make_list(Tree::Continue(match state.tsret.get_text(&node.child(1).expect("")) {
+    TreeContainer::make(Tree::Continue(match state.tsret.get_text(&node.child(1).expect("")) {
         ";" => state.continue_label.expect("Loop was not labeled!"),
         ident => state.find_label(ident).expect("Unknown label")
     }))
 }
 
 fn expression_statement(node: Node, state: &mut State) -> TreeContainer {
-    make_list(Tree::LetP(PrimStatement {
+    TreeContainer::make(Tree::LetP(PrimStatement {
         name: state.sm.fresh("expr_stmt"),
         typ: Typ::Void,
         exp: Some(expression(node.child(0).expect("Expression is non-null"), state))
@@ -402,7 +396,7 @@ fn expression_statement(node: Node, state: &mut State) -> TreeContainer {
 }
 
 fn labeled_statement(node: Node, state: &mut State) -> TreeContainer {
-    let mut ans = LinkedList::new();
+    let mut ans = TreeContainer::new();
     let label_str = state.tsret.get_text(&node.child(0).expect("Label does not exist!"));
     let label_sym = state.sm.fresh(label_str);
     state.label = Some(label_sym);
@@ -422,7 +416,7 @@ fn labeled_statement(node: Node, state: &mut State) -> TreeContainer {
             }));
         }
     } else {
-        ans.append(&mut statement(content, state))
+        ans.append(statement(content, state))
     };
     state.scope_out();
     state.label_stk.pop();
@@ -437,7 +431,7 @@ fn switch_statement(node: Node, state: &mut State) -> TreeContainer {
     let arg = expression(state.tsret.get_field(&node, "condition"), state);
     let mut cases: Vec<(Vec<Operand>, TreeContainer)> = Vec::new();
     let mut cur_args: Vec<Operand> = Vec::new();
-    let mut default: TreeContainer = LinkedList::new();
+    let mut default: TreeContainer = TreeContainer::new();
     let block = state.tsret.get_field(&node, "body");
     let mut cursor = block.walk();
     cursor.goto_first_child();
@@ -459,7 +453,7 @@ fn switch_statement(node: Node, state: &mut State) -> TreeContainer {
         }
     }
     state.restore_break_label(bstash);
-    make_list(Tree::Switch(SwitchStatement {
+    TreeContainer::make(Tree::Switch(SwitchStatement {
         arg,
         label: switch_label,
         cases: cases,
@@ -477,8 +471,8 @@ fn switch_block_statement_group(node: Node, state: &mut State) -> (Vec<Operand>,
             "switch_label" => switch_label(child, state).map(|e| ops.push(e)),
             _ => break
         };
-        if !cur.goto_next_sibling() { return (ops, LinkedList::new()) }
-        if !cur.goto_next_sibling() { return (ops, LinkedList::new()) }
+        if !cur.goto_next_sibling() { return (ops, TreeContainer::new()) }
+        if !cur.goto_next_sibling() { return (ops, TreeContainer::new()) }
     }
     (ops, statements(cur.node(), state))
 }
@@ -498,12 +492,12 @@ fn if_statement(node: Node, state: &mut State) -> TreeContainer {
         inline_statement(state.tsret.get_field(&node, "consequence"), state),
         Tree::Break(branch_label)
     );
-    let mut bfalse = LinkedList::new();
+    let mut bfalse = TreeContainer::new();
     node.child_by_field_name("alternative").map(|alt| bfalse = tail(
         inline_statement(alt, state),
         Tree::Break(branch_label)
     ));
-    make_list(Tree::If(IfStatement {
+    TreeContainer::make(Tree::If(IfStatement {
         cond: expression(state.tsret.get_field(&node, "condition"), state),
         btrue,
         bfalse,
@@ -522,7 +516,7 @@ fn while_statement(node: Node, state: &mut State, dowhile: bool) -> TreeContaine
     );
     state.restore_break_label(bstash);
     state.restore_continue_label(cstash);
-    make_list(Tree::Loop(LoopStatement {
+    TreeContainer::make(Tree::Loop(LoopStatement {
         cond: expression(state.tsret.get_field(&node, "condition"), state),
         lbody: inline_body,
         label: loop_label,
@@ -540,10 +534,10 @@ fn for_statement(node: Node, state: &mut State) -> TreeContainer {
     };
 
     state.scope_in();
-    let mut res = LinkedList::new();
+    let mut res = TreeContainer::new();
     let fchild = state.tsret.get_field(&node, "init");
     if fchild.kind() == "local_variable_declaration" {
-        res.append(&mut local_variable_declaration(fchild, state));
+        res.append(local_variable_declaration(fchild, state));
     } else {
         let mut cursor = node.walk();
         for child in node.children_by_field_name("init", &mut cursor) {
@@ -560,7 +554,7 @@ fn for_statement(node: Node, state: &mut State) -> TreeContainer {
         inline_statement(state.tsret.get_field(&node, "body"), state),
         Tree::Break(block_label)
     );
-    let mut lbody = LinkedList::new();
+    let mut lbody = TreeContainer::new();
     lbody.push_back(Tree::Block(BlockStatement {
         label: block_label,
         bbody: inline_body
@@ -581,7 +575,7 @@ fn for_statement(node: Node, state: &mut State) -> TreeContainer {
 }
 
 fn assert_statement(node: Node, state: &mut State) -> TreeContainer {
-    make_list(Tree::LetP(PrimStatement {
+    TreeContainer::make(Tree::LetP(PrimStatement {
         name: state.sm.fresh("assert"),
         typ: Typ::Void,
         exp: Some(Operand::T(ExprTree {
@@ -622,7 +616,7 @@ fn local_variable_declaration(node: Node, state: &mut State) -> TreeContainer {
         break;
     };
 
-    let mut res = LinkedList::new();
+    let mut res = TreeContainer::new();
     for (name, exp) in syms.into_iter().zip(exps.into_iter()) {
         res.push_back(Tree::LetP(PrimStatement {
             name, typ: tp.clone(), exp
@@ -633,7 +627,7 @@ fn local_variable_declaration(node: Node, state: &mut State) -> TreeContainer {
 
 fn inline_block(node: Node, state: &mut State) -> TreeContainer {
     state.scope_in();
-    let mut res = LinkedList::new();
+    let mut res = TreeContainer::new();
     if let Some(child) = node.named_child(0) {
         res = statements(child, state);
     }
@@ -645,7 +639,7 @@ fn inline_block(node: Node, state: &mut State) -> TreeContainer {
 // If the statement is a block, it hoists the contents, otherwise, it uses them directly.
 fn inline_statement(node: Node, state: &mut State) -> TreeContainer {
     state.scope_in();
-    let mut res = LinkedList::new();
+    let mut res = TreeContainer::new();
     if node.kind() == "block" {
         if let Some(child) = node.named_child(0) {
             res = statements(child, state);
@@ -817,8 +811,8 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
                 }
             }).unwrap_or_else(|| state.sm.fresh_reserved(fname));
             let mut args = vec![obj, Operand::V(fsym)];
-            args.extend(parse_args(node.child_by_field_name("arguments").expect("method lacks args"), state));
-            (O::T(ExprTree { op: Operation::Call, args }), state.type_map.get(&fsym).cloned())
+            args.extend(parse_args(state.tsret.get_field(&node, "arguments"), state));
+            (O::T(ExprTree { op: Operation::InvokeVirtual, args }), state.type_map.get(&fsym).cloned())
         },
         "method_reference" => panic!("Method references are not supported!"),
         "array_creation_expression" => {
@@ -841,6 +835,8 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
                     }
                 }
             }
+
+            println!("ndims: {}, nargs: {}", ndims, args.len());
             
             let eltype = Box::new(state.get_typ(&node));
             let tp = Typ::Array(ArrayTyp { eltype, dims: ndims });
@@ -876,8 +872,7 @@ fn parse_array_initializer(node: Node, state: &mut State) -> ArrayInitializer {
             _ => ops.push(Box::new(ElementInitializer::Expr(expression(child, state))))
         }
     }
-    let dims = ops.len() as u8;
-    return ArrayInitializer { ops, dims };
+    return ArrayInitializer { ops };
 }
 
 fn parse_args(node: Node, state: &mut State) -> Vec<Operand> {
