@@ -150,9 +150,8 @@ fn statement(root: &Tree, state: &mut State) -> TreeContainer {
     }
 }
 
-fn array_initializer(init: &ArrayInitializer, state: &mut State) -> (TreeContainer, ArrayInitializer) {
+fn array_initializer(ops: &ArrayInitializer, state: &mut State) -> (TreeContainer, ArrayInitializer) {
     use ElementInitializer as E;
-    let ArrayInitializer { ops } = init;
     let (lhsv, args) = ops.iter().map(|item| match item.as_ref() {
         E::Expr(exp) => { 
             let (v, e) = operand(exp, state);
@@ -169,19 +168,21 @@ fn array_initializer(init: &ArrayInitializer, state: &mut State) -> (TreeContain
         aops.push(op);
         (av, aops)
     });
-    (lhsv, ArrayInitializer { ops: args })
+    (lhsv, args)
 }
 
-fn operand(op: &Operand, state: &mut State) -> (TreeContainer, Operand) {
+fn operand(root: &Operand, state: &mut State) -> (TreeContainer, Operand) {
     use Operation::*;
-    match op {
-        Operand::This => (TreeContainer::new(), Operand::This),
-        Operand::Super => (TreeContainer::new(), Operand::Super),
+    match root {
+        Operand::This(sym) => (TreeContainer::new(), Operand::This(*sym)),
+        Operand::Super(sym) => (TreeContainer::new(), Operand::Super(*sym)),
         Operand::C(lit) => (TreeContainer::new(), Operand::C(lit.clone())),
         Operand::V(sym) => (TreeContainer::new(), Operand::V(*sym)),
-        Operand::A(aexp) => match aexp {
-            ArrayExpression::Empty(tp, bempty) => {
-                let ArrayEmpty { ops, dims } = bempty.as_ref();
+        Operand::Tp(t) => (TreeContainer::new(), Operand::Tp(t.clone())),
+        Operand::A(array) => match array {
+            // We don't use wrap_prim here since that would remove the type argument.
+            ArrayExpression::Empty(bempty) => {
+                let ops = bempty.as_ref();
                 let mut lhsv = TreeContainer::new();
                 let mut nops = vec![ops[0].clone()];
                 for arg in &ops[1..] {
@@ -189,30 +190,29 @@ fn operand(op: &Operand, state: &mut State) -> (TreeContainer, Operand) {
                     lhsv.append(rhsv);
                     nops.push(r);
                 }
-                let resop = Operand::A(ArrayExpression::Empty(
-                    tp.clone(), Box::new(ArrayEmpty { ops: nops, dims: *dims})
-                ));
-                wrap_prim(lhsv, resop, state)
+                (lhsv, Operand::A(ArrayExpression::Empty(Box::new(nops))))
             },
-            ArrayExpression::Initializer(tp, a) => {
+            ArrayExpression::Initializer(a) => {
                 let (v, e) = array_initializer(a, state);
-                let op = Operand::A(ArrayExpression::Initializer(tp.clone(), Box::new(e)));
-                wrap_prim(v, op, state)
+                (v, Operand::A(ArrayExpression::Initializer(Box::new(e))))
             }
         },
         Operand::T(ExprTree { op, args }) => match op {
-            Add | Sub | Mul | Div | Mod |
-            Set | PSet | SSet | MSet | DSet | ModSet |
-            AndSet | OrSet | XorSet | ShrSet |
-            UshrSet | ShlSet | Eq | Neq | G | L |
+            Add | Sub | Mul | Div | Mod | Eq | Neq | G | L |
             GEq | LEq | LAnd | LOr | LNot | Shl |
             Shr | UShr | And | Or | Xor | InstanceOf |
-            Phi | Assert | Index | Access | ArrayNew if args.len() == 2 => {
+            Phi | Assert | Index | Access if args.len() == 2 => {
                 let (lhsv, l) = operand(&args[0], state);
                 let (rhsv, r) = operand(&args[1], state);
                 let op = Operand::T(ExprTree { op: *op, args: vec![l, r] });
                 wrap_prim(lhsv + rhsv, op, state)
-            }
+            },
+            Set | PSet | SSet | MSet | DSet | ModSet |
+            AndSet | OrSet | XorSet | ShrSet | UshrSet | ShlSet if args.len() == 2 => {
+                let (rhsv, r) = operand(&args[1], state);
+                let op = Operand::T(ExprTree { op: *op, args: vec![args[0].clone(), r] });
+                wrap_prim(rhsv, op, state)
+            },
             PreInc | PreDec | Not | LNot | Sub | PostInc | PostDec | Assert if args.len() == 1 => {
                 let (v, e) = operand(&args[0], state);
                 let op = Operand::T(ExprTree { op: *op, args: vec![e] });
@@ -225,6 +225,12 @@ fn operand(op: &Operand, state: &mut State) -> (TreeContainer, Operand) {
                 let op = Operand::T(ExprTree { op: *op, args: vec![l, r, m] });
                 wrap_prim(lhsv + rhsv + mhsv, op, state)
             },
+            ArrayNew if args.len() == 2 => {
+                let (rhsv, r) = operand(&args[1], state);
+                let op = Operand::T(ExprTree { op: *op, args: vec![args[0].clone(), r] });
+                wrap_prim(rhsv, op, state)
+            },
+            // Access if args.len() == 2 => (TreeContainer::new(), root.clone()),
             New if args.len() > 1 => {
                 let mut lhsv = TreeContainer::new();
                 let mut nargs = vec![args[0].clone()];

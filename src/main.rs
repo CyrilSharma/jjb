@@ -8,6 +8,7 @@ mod directory;
 mod hoist;
 mod container;
 mod typeinfer;
+mod typetracker;
 use typeinfer::typeinfer;
 use hoist::hoist;
 use converter::convert;

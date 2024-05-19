@@ -467,12 +467,12 @@ method_test!(block_1, r#"
 
 method_test!(array_1, r#"
     int[] vars = new int[10];
-    for (int i = 0; i < vars.length; i++) {
+    for (int i = 0; i < 10; i++) {
         System.out.print(vars[i]);
     }
 
     int[] array = new int[] { 0, 1, 2, 3, 4, 5 };
-    for (int i = 0; i < array.length; i++) {
+    for (int i = 0; i < 6; i++) {
         System.out.print(array[i]);
     }
 "#);

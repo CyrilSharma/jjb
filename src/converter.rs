@@ -7,6 +7,7 @@ use crate::ir::*;
 use crate::symbolmaker::{Symbol, SymbolMaker};
 use crate::tsretriever::TsRetriever;
 use crate::scope::Scope;
+use crate::typetracker::TypeTracker;
 use tree_sitter::Node;
 
 struct State<'l> {
@@ -320,11 +321,8 @@ fn enum_declaration(node: Node, state: &mut State) -> TreeContainer {
 }
 
 fn method_declaration(node: Node, state: &mut State, name: Symbol) -> Tree {
-    let rtyp = if node.kind() == "constructor_declaration" {
-        None
-    } else {
-        Some(state.type_map.get(&name).expect("Funtype was not inserted!").clone())
-    };
+    let constructor = node.kind() == "constructor_declaration";
+    let rtyp = state.type_map.get(&name).expect("Funtype was not inserted!").clone();
     let mut modifiers = Vec::new();
     let mods = node.named_child(0).expect("Method has 0 children.");
     // TODO: All we really care about is whether the method is static.
@@ -369,7 +367,8 @@ fn method_declaration(node: Node, state: &mut State, name: Symbol) -> Tree {
         args,
         throws,
         modifiers,
-        body
+        body,
+        constructor
     })
 }
 
@@ -711,11 +710,15 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
         "null_literal" => (O::C(state.tsret.get_lit(&node)), None),
 
         "class_literal" => panic!("Class Literals are not (yet) supported!"),
-        "this" => (O::This, Some(Typ::Class(state.class_sym.expect("Current Class not set!")))),
+        "this" => {
+            let class_sym = state.class_sym.expect("Current Class not set!");
+            (O::This(class_sym), Some(Typ::Class(class_sym)))
+        },
         "super" => {
-            let parent = state.directory.resolve_parent(state.class_sym.expect("Current Class not set!"));
-            (O::Super, Some(Typ::Class(parent.expect("Invalid use of super"))))
-        }
+            let class_sym = state.class_sym.expect("Current Class not set!");
+            let parent = state.directory.resolve_parent(class_sym).expect("Invalid use of Super");
+            (O::Super(parent), Some(Typ::Class(parent)))
+        },
         "identifier" => {
             // Not actually sure if I should be allowing classes here...
             let iname = state.tsret.get_text(&node);
@@ -725,15 +728,12 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
             if let Some(sym) = isym {
                 (O::V(sym), state.type_map.get(&sym).cloned())   
             } else {
-                let res = state.directory.resolve_field(
-                    state.class_sym.expect(""), iname
-                );
+                let class_sym = state.class_sym.expect("Missing Class");
+                let res = state.directory.resolve_field(class_sym, iname);
                 if let Some(sym) = res {
-                    // The symbol belongs to the current class!
-                    // Replace it with this.symbol to represent the code better.
                     let tree = O::T(ExprTree {
                         op: Operation::Access,
-                        args: vec![Operand::This, Operand::V(*sym)]}
+                        args: vec![Operand::This(class_sym), Operand::V(*sym)]}
                     );
                     (tree, state.type_map.get(&sym).cloned())
                 } else {
@@ -835,22 +835,19 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
                     }
                 }
             }
-
-            println!("ndims: {}, nargs: {}", ndims, args.len());
             
             let eltype = Box::new(state.get_typ(&node));
             let tp = Typ::Array(ArrayTyp { eltype, dims: ndims });
             let value_node = node.child_by_field_name("value");
-            let op = if let Some(vnode) = value_node {
+            let a = if let Some(vnode) = value_node {
                 O::A(ArrayExpression::Initializer(
-                    tp.clone(), Box::new(parse_array_initializer(vnode, state)
+                    Box::new(parse_array_initializer(vnode, state)
                 )))
             } else {
-                O::A(ArrayExpression::Empty(
-                    tp.clone(), Box::new(ArrayEmpty { ops: args, dims: ndims })
-                ))
+                O::A(ArrayExpression::Empty(Box::new(args)))
             };
-            return (op, Some(tp))
+            let tree = O::T(ExprTree { op: Operation::ArrayNew, args: vec![O::Tp(tp.clone()), a] });
+            return (tree, Some(tp));
         },
         "template_expression" => panic!("Template expressions are not supported yet."),
 
@@ -872,7 +869,7 @@ fn parse_array_initializer(node: Node, state: &mut State) -> ArrayInitializer {
             _ => ops.push(Box::new(ElementInitializer::Expr(expression(child, state))))
         }
     }
-    return ArrayInitializer { ops };
+    return ops;
 }
 
 fn parse_args(node: Node, state: &mut State) -> Vec<Operand> {

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt;
 use crate::container::Container;
 use crate::symbolmaker::Symbol;
@@ -15,26 +16,10 @@ pub enum Typ {
     Float,
     Double,
     Str,
-    Array(ArrayTyp), // I want this to be a symbol too...
+    // I want this to be a symbol too...
+    Array(ArrayTyp), 
     Class(Symbol)
 }
-
-// TODO: TypTree, and then we can replace all types with symbols!
-// pub enum TypTree {
-//     Unknown,
-//     Void,
-//     Bool,
-//     Char,
-//     Byte,
-//     Int,
-//     Short,
-//     Long,
-//     Float,
-//     Double,
-//     Str,
-//     Array(ArrayTyp), // I want this to be a symbol too...
-//     Class(Symbol)
-// }
 
 impl Typ {
     pub fn intrank(&self) -> u8 {
@@ -56,27 +41,18 @@ pub struct ArrayTyp {
     pub dims: u8
 }
 
-#[derive(Clone, Debug)]
-pub enum ArrayExpression {
-    Empty(Typ, Box<ArrayEmpty>),
-    Initializer(Typ, Box<ArrayInitializer>)
-}
+pub type ArrayInitializer = Vec<Box<ElementInitializer>>;
 
 #[derive(Clone, Debug)]
-pub struct ArrayEmpty {
-    pub ops: Vec<Operand>,
-    pub dims: u8
+pub enum ArrayExpression {
+    Empty(Box<Vec<Operand>>),
+    Initializer(Box<ArrayInitializer>)
 }
 
 #[derive(Clone, Debug)]
 pub enum ElementInitializer {
     Expr(Operand),
     ArrayInitializer(ArrayInitializer)
-}
-
-#[derive(Clone, Debug)]
-pub struct ArrayInitializer {
-    pub ops: Vec<Box<ElementInitializer>>
 }
 
 #[derive(Clone, Debug)]
@@ -90,23 +66,25 @@ pub enum Literal {
     Long(i64),
     Float(f32),
     Double(f64),
+    // You can replace this with Cow<>
+    // Or, you can make another Symbol, or index
     String(String)
 }
 
 impl fmt::Display for Literal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", match self {
-            Literal::Null => "null".to_string(),
-            Literal::Bool(b) => b.to_string(), 
-            Literal::Char(c) => c.to_string(),
-            Literal::Byte(b) => b.to_string(),
-            Literal::Int(i) => i.to_string(),
-            Literal::Short(s) => s.to_string(),
-            Literal::Long(l) => l.to_string(),
-            Literal::Float(f) => f.to_string(),
-            Literal::Double(d) => d.to_string(),
-            Literal::String(s) => s.clone()
-        })
+        match self {
+            Literal::Null => write!(f, "null"),
+            Literal::Bool(b) => write!(f, "{}", b),
+            Literal::Char(c) => write!(f, "{}", c), 
+            Literal::Byte(b) => write!(f, "{}", b),
+            Literal::Int(i) => write!(f, "{}", i),
+            Literal::Short(s) => write!(f, "{}", s),
+            Literal::Long(l) => write!(f, "{}", l),
+            Literal::Float(fl) => write!(f, "{}", fl),
+            Literal::Double(d) => write!(f, "{}", d),
+            Literal::String(s) => write!(f, "{}", s)
+        }
     }
 }
 
@@ -214,12 +192,13 @@ pub struct ImportDeclaration {
 
 #[derive(Clone, Debug)]
 pub enum Operand {
-    This,
-    Super,
+    This(Symbol),
+    Super(Symbol),
     C(Literal),
     V(Symbol),
     T(ExprTree),
-    A(ArrayExpression)
+    A(ArrayExpression),
+    Tp(Typ)
 }
 
 #[derive(Clone, Debug)]
@@ -241,8 +220,9 @@ pub struct FunDeclaration {
     pub args: Vec<(Symbol, Typ)>,
     pub modifiers: Vec<String>,
     pub throws: Vec<String>,
-    pub return_typ: Option<Typ>,
-    pub body: TreeContainer
+    pub return_typ: Typ,
+    pub body: TreeContainer,
+    pub constructor: bool
 }
 
 #[derive(Clone)]

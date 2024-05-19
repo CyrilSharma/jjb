@@ -64,12 +64,10 @@ fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
                 }
             }
         },
-        Tree::LetF(FunDeclaration { name, args, modifiers, throws, return_typ, body }) => {
+        Tree::LetF(FunDeclaration { name, args, modifiers, throws, return_typ, body, constructor }) => {
             let mut header = modifiers.join(" ");
             if modifiers.len() != 0 { header.push_str(" ") }
-            return_typ.as_ref().map(|tp| header.push_str(&format!("{} ",
-                serialize_tp(tp, state)
-            )));
+            if !constructor { header.push_str(&format!("{} ", serialize_tp(return_typ, state))); }
             header.push_str(&format!("{}({})",
                 state.uname(*name),
                 args.iter().map(|(sym, typ)|
@@ -166,8 +164,7 @@ fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
     }
 }
 
-fn serialize_array_initializer(init: &ArrayInitializer, state: &mut PrintState<'_, impl Write>) -> String {
-    let ArrayInitializer { ops } = init;
+fn serialize_array_initializer(ops: &ArrayInitializer, state: &mut PrintState<'_, impl Write>) -> String {
     let exp = ops.iter().map(|item| match item.as_ref() {
         ElementInitializer::Expr(exp) => serialize_op(exp, state),
         ElementInitializer::ArrayInitializer(a) => serialize_array_initializer(a, state)
@@ -178,32 +175,14 @@ fn serialize_array_initializer(init: &ArrayInitializer, state: &mut PrintState<'
 
 fn serialize_op(op: &Operand, state: &mut PrintState<'_, impl Write>) -> String {
     match op {
-        Operand::Super => "super".to_string(),
-        Operand::This => "this".to_string(),
+        Operand::Super(_) => "super".to_string(),
+        Operand::This(_) => "this".to_string(),
         Operand::C(lit) => format!("{}", lit),
         Operand::V(sym) => state.uname(*sym),
-        Operand::A(array) => match array {
-            ArrayExpression::Empty(tp, aempty_box) => {
-                let el_tp = if let Typ::Array(ArrayTyp { eltype, dims }) = tp { eltype } else {
-                    panic!("Invalid Array")
-                };
-                let ArrayEmpty { ops, dims } = aempty_box.as_ref();
-                let exp = ops.iter().map(|item| format!("[{}]", serialize_op(item, state)))
-                    .collect::<Vec<_>>()
-                    .join("");
-                format!(
-                    "new {}{}{}", serialize_tp(&el_tp, state), exp,
-                    "[]".repeat((*dims as usize) - ops.len())
-                )
-            }
-            ArrayExpression::Initializer(tp, initial_box) => format!("new {}{}",
-                serialize_tp(&tp, state),
-                serialize_array_initializer(initial_box.as_ref(), state)
-            )
-        },
+        Operand::A(_) => panic!("This case is handled seperately"),
+        Operand::Tp(_) => panic!("This case is handled seperately"),
         Operand::T(ExprTree { op, args }) => {
             use Operation::*;
-            // Probably factor this out eventually.
             match op {
                 Add | Sub | Mul | Div | Mod |
                 Set | PSet | SSet | MSet | DSet | ModSet |
@@ -244,9 +223,7 @@ fn serialize_op(op: &Operand, state: &mut PrintState<'_, impl Write>) -> String 
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
-                ArrayNew if args.len() == 1 => format!("new {}", 
-                    serialize_op(&args[0], state)
-                ),
+                ArrayNew if args.len() == 2 => serialize_array(&args[0], &args[1], state),
                 InvokeVirtual | InvokeVirtual if args.len() >= 2 => format!("{}.{}({})",
                     serialize_op(&args[0], state),
                     serialize_op(&args[1], state),
@@ -269,6 +246,29 @@ fn serialize_op(op: &Operand, state: &mut PrintState<'_, impl Write>) -> String 
                 )
             }
         }
+    }
+}
+
+fn serialize_array(optyp: &Operand, op: &Operand, state: &mut PrintState<'_, impl Write>) -> String {
+    let tp = if let Operand::Tp(t) = optyp { t } else { panic!("Unknown Array Tp!") };
+    let array = if let Operand::A(array) = op { array } else { panic!("Unknown Array Op") };
+    let (eltype, dims) = if let Typ::Array(ArrayTyp { eltype, dims }) = tp
+        { (eltype, dims) } else { panic!("Invalid Array") };
+    match array {
+        ArrayExpression::Empty(aempty_box) => {
+            let ops = aempty_box.as_ref();
+            let exp = ops.iter().map(|item| format!("[{}]", serialize_op(item, state)))
+                .collect::<Vec<_>>()
+                .join("");
+            format!(
+                "new {}{}{}", serialize_tp(&eltype, state), exp,
+                "[]".repeat((*dims as usize) - ops.len())
+            )
+        }
+        ArrayExpression::Initializer(initial_box) => format!("new {}{}",
+            serialize_tp(&tp, state),
+            serialize_array_initializer(initial_box.as_ref(), state)
+        )
     }
 }
 

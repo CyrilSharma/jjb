@@ -8,3 +8,4 @@ pub mod ir;
 pub mod hoist;
 pub mod container;
 pub mod typeinfer;
+pub mod typetracker;

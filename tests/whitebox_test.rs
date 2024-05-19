@@ -39,10 +39,10 @@ fn traverse(root: &Tree, state: &mut CheckState) {
     match root {
         Tree::Program(stmts) => stmts.iter().for_each(|s| traverse(s, state)),
         Tree::LetI(ImportDeclaration { path }) => (),
-        Tree::LetF(FunDeclaration { name, args, modifiers, throws, return_typ, body }) => {
-            inc(&mut state.fun_syms, *name);
-            for (sym, _) in args { inc(&mut state.var_syms, *sym) }
-            body.iter().for_each(|b| traverse(b, state));
+        Tree::LetF(f) => {
+            inc(&mut state.fun_syms, f.name);
+            for (sym, _) in &f.args { inc(&mut state.var_syms, *sym) }
+            f.body.iter().for_each(|b| traverse(b, state));
         },
         Tree::LetC(ClassDeclaration { name, members, methods, extends }) => {
             inc(&mut state.class_syms, *name);
@@ -80,8 +80,8 @@ fn traverse(root: &Tree, state: &mut CheckState) {
 
 fn operand(op: &Operand, state: &mut CheckState) {
     match op {
-        Operand::This => (),
-        Operand::Super => (),
+        Operand::This(_) => (),
+        Operand::Super(_) => (),
         Operand::C(_) => (),
         Operand::V(sym) => inc(&mut state.var_syms, *sym),
         Operand::T(ExprTree { op, args }) => match op {
@@ -100,7 +100,7 @@ fn operand(op: &Operand, state: &mut CheckState) {
                 args[2..].iter().for_each(|arg| operand(arg, state));
             },
             _ => { args.iter().for_each(|arg| operand(arg, state)); }
-        }
+        },
         other => todo!()
     }
 }

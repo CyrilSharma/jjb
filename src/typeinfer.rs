@@ -31,10 +31,7 @@ fn initialize_directory(tree: &Tree, state: &mut State) {
             for method in &cdecl.methods { initialize_directory(method, state) }
             for (sym, tp) in &cdecl.members { state.typemap.insert(*sym, tp.clone()); }
         },
-        Tree::LetF(FunDeclaration { name, args, modifiers, throws, return_typ, body }) => {
-            // TODO: change Option<Type> to Enum(Type) so we don't have to track stuff.
-            // state.typemap.insert(*name, return_typ.clone()); 
-        }
+        Tree::LetF(f) => { state.typemap.insert(f.name, f.return_typ.clone()); },
         _ => ()
     }
 }
@@ -43,13 +40,13 @@ fn statement(tree: &mut Tree, state: &mut State) {
     use Tree as T;
     match tree {
         T::Program(stmts) => stmts.iter_mut().for_each(|s| statement(s, state)),
-        T::LetF(FunDeclaration { name, args, modifiers, throws, return_typ, body }) => {
-            for (sym, tp) in args { state.typemap.insert(*sym, tp.clone()); }
-            for s in body { statement(s, state) }
+        T::LetF(f) => {
+            for (sym, tp) in &f.args { state.typemap.insert(*sym, tp.clone()); }
+            for s in &mut f.body { statement(s, state) }
         },
-        T::LetC(ClassDeclaration { name, members, methods, extends }) => {
-            for (sym, tp) in members { state.typemap.insert(*sym, tp.clone()); }
-            for method in methods { statement(method, state) }
+        T::LetC(c) => {
+            for (sym, tp) in &c.members { state.typemap.insert(*sym, tp.clone()); }
+            for method in &mut c.methods { statement(method, state) }
         },
         T::LetE(_) => todo!(),
         T::LetP(PrimStatement { name, typ, exp }) => {
@@ -104,8 +101,9 @@ fn operand(op: &mut Operand, state: &mut State) -> Typ {
     use Literal as L;
     use Operation::*;
     match op {
-        O::This => Typ::Unknown,
-        O::Super => Typ::Unknown,
+        O::Tp(_) => panic!("Type operands are handled specially"),
+        O::This(sym) => Typ::Class(*sym),
+        O::Super(sym) => Typ::Class(*sym),
         O::C(lit) => match lit {
             L::Null => Typ::Unknown,
             L::Bool(_) => Typ::Bool,
@@ -119,10 +117,7 @@ fn operand(op: &mut Operand, state: &mut State) -> Typ {
             L::String(_) => Typ::Str
         }
         O::V(sym) => state.typemap.get(&sym).expect("Symbol was not inserted!").clone(),
-        O::A(arr) => match arr {
-            ArrayExpression::Empty(tp, bempty) => tp.clone(),
-            ArrayExpression::Initializer(tp, a) => tp.clone()
-        },
+        O::A(_) => panic!("Array Operand should be handled specially."),
         O::T(ExprTree { op, args }) => match op {
             Add | Sub | Mul | Div | Mod |
             Shl | Shr | UShr | And | Or | Xor if args.len() == 2 => {
@@ -146,28 +141,33 @@ fn operand(op: &mut Operand, state: &mut State) -> Typ {
             },
             Assert => Typ::Unknown,
             New if args.len() > 1 => todo!(),
-            ArrayNew if args.len() == 1 => match &args[0] {
-                Operand::A(aexp) => match aexp {
-                    ArrayExpression::Empty(tp, _) => tp.clone(),
-                    ArrayExpression::Initializer(tp, _) => tp.clone()
-                }
-                _ => panic!("Invalid ArrayNew")
-            },
-            InvokeVirtual | InvokeStatic => Typ::Unknown,
-            Access if args.len() == 2 => {
+            ArrayNew if args.len() == 2 => {
                 match &args[0] {
-                    O::This => todo!(),
-                    O::Super => todo!(),
-                    O::C(_) => todo!(),
-                    O::V(_) => todo!(),
-                    O::A(_) => todo!(),
+                    Operand::Tp(tp) => tp.clone(),
+                    _ => panic!("Invalid ArrayNew")
+                }
+            },
+            InvokeVirtual | InvokeStatic => {
+                match &args[1] {
+                    O::V(sym) => state.typemap.get(&sym).expect("Symbol was not found in map").clone(),
+                    _ => Typ::Unknown
+                }
+            },
+            Access if args.len() == 2 => {
+                // It is expected that symbols have already been resolved.
+                // Hence, field accesses should already be pointing to their corresponding fields.
+                match &args[1] {
+                    O::This(sym) => Typ::Class(*sym),
+                    O::Super(sym) => Typ::Class(*sym),
+                    O::C(_) => panic!("Invalid Constant Access"),
+                    O::V(sym) => state.typemap.get(&sym).expect("Symbol was not found in map").clone(),
+                    O::A(_) => panic!("Invalid Array Access"),
+                    O::Tp(_) => panic!("Invalid Type Access"),
                     O::T(_) => Typ::Unknown,
                 }
             }
             Index if args.len() == 2 => {
-                let tp1 = operand(&mut args[1], state);
-                let tp2 = operand(&mut args[2], state);
-                match tp1 {
+                match operand(&mut args[0], state) {
                     Typ::Array(ArrayTyp { eltype, dims }) => *eltype,
                     _ => panic!("Invalid access")
                 }
