@@ -514,3 +514,39 @@ classes_test!(obj1, r#"
         }
     }
 "#);
+
+classes_test!(obj2, r#"
+    class Item {
+        int a;
+        Item(int _a) {
+            a = _a;
+        }
+    }
+    class Point {
+        int x;
+        int y;
+        Item c;
+        Point(int _x, int _y) {
+            x = _x;
+            y = _y;
+            c = new Item(10);
+        }
+
+        public int getx() {
+            return x;
+        }
+
+        public int gety() {
+            return y;
+        }
+    }
+    class Test {
+        public static void main() {
+            int x = 0, y = 2;
+            Point p = new Point(x, y);
+            System.out.printf("%d\n", p.c.a);
+            p.c.a = 20;
+            System.out.printf("%d\n", p.c.a);
+        }
+    }
+"#);

@@ -209,9 +209,10 @@ fn operand(root: &Operand, state: &mut State) -> (TreeContainer, Operand) {
             },
             Set | PSet | SSet | MSet | DSet | ModSet |
             AndSet | OrSet | XorSet | ShrSet | UshrSet | ShlSet if args.len() == 2 => {
+                let (lhsv, l) = assignee(&args[0], state);
                 let (rhsv, r) = operand(&args[1], state);
-                let op = Operand::T(ExprTree { op: *op, args: vec![args[0].clone(), r] });
-                wrap_prim(rhsv, op, state)
+                let op = Operand::T(ExprTree { op: *op, args: vec![l, r] });
+                wrap_prim(lhsv + rhsv, op, state)
             },
             PreInc | PreDec | Not | LNot | Sub | PostInc | PostDec | Assert if args.len() == 1 => {
                 let (v, e) = operand(&args[0], state);
@@ -260,5 +261,21 @@ fn operand(root: &Operand, state: &mut State) -> (TreeContainer, Operand) {
                 operator, args.len()
             )
         }
+    }
+}
+
+fn assignee(root: &Operand, state: &mut State) -> (TreeContainer, Operand) {
+    match root {
+        Operand::V(sym) => (TreeContainer::new(), Operand::V(*sym)),
+        Operand::T(ExprTree { op, args }) => match op {
+            Operation::Access | Operation::Index => {
+                let (lhsv, l) = operand(&args[0], state);
+                let r = args[1].clone();
+                let op = Operand::T(ExprTree { op: *op, args: vec![l, r] });
+                (lhsv, op)
+            },
+            other => panic!("Invalid Assignee Op: {:?}", other)
+        },
+        other => panic!("Invalid Assignee Operand: {:?}", other)
     }
 }

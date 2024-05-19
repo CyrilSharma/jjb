@@ -801,8 +801,9 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
             // TODO: this is bad, it's a basic feature and you will need this for inlining extended classes.
             node.child(2).map(|x| if x.kind() == "super" { panic!("Super not supported in invocation (yet)!") });
             
-            let (obj, obj_type) = type_expression(node.child_by_field_name("object").expect(""), state);
             let fname = state.tsret.get_field_text(&node, "name");
+            let obj_node = node.child_by_field_name("object").expect("missing object");
+            let (obj, obj_type) = type_expression(obj_node, state);
             let fsym = obj_type.and_then(|x| {
                 if let Typ::Class(csym) = x {
                     state.directory.resolve_method(csym, fname).copied()

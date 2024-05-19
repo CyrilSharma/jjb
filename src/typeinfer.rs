@@ -140,7 +140,12 @@ fn operand(op: &mut Operand, state: &mut State) -> Typ {
                 type_conform(tp1, tp2)
             },
             Assert => Typ::Unknown,
-            New if args.len() > 1 => todo!(),
+            New if args.len() > 1 => {
+                match &args[0] {
+                    Operand::V(sym) => Typ::Class(*sym),
+                    _ => panic!("Invalid new!")
+                }
+            },
             ArrayNew if args.len() == 2 => {
                 match &args[0] {
                     Operand::Tp(tp) => tp.clone(),
