@@ -41,6 +41,7 @@ impl<T> Container<T> {
     }
 }
 
+#[derive(Clone)]
 pub struct ContainerIter<'a, T> {
     iter: std::collections::linked_list::Iter<'a, T>,
 }
@@ -78,11 +79,33 @@ impl<'a, T> IntoIterator for &'a Container<T> {
     }
 }
 
+#[derive(Clone)]
+pub struct ContainerIntoIter<T> {
+    inner: std::collections::LinkedList<T>,
+    current: Option<std::collections::linked_list::IntoIter<T>>,
+}
+
+impl<T> Iterator for ContainerIntoIter<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(iter) = &mut self.current {
+            iter.next()
+        } else {
+            None
+        }
+    }
+}
+
 impl<T> IntoIterator for Container<T> {
     type Item = T;
-    type IntoIter = std::collections::linked_list::IntoIter<T>;
+    type IntoIter = ContainerIntoIter<T>;
+
     fn into_iter(self) -> Self::IntoIter {
-        self.container.into_iter()
+        ContainerIntoIter {
+            current: Some(self.container.into_iter()),
+            inner: self.container,
+        }
     }
 }
 
@@ -119,5 +142,19 @@ impl<'a, T> IntoIterator for &'a mut Container<T> {
     type IntoIter = ContainerIterMut<'a, T>;
     fn into_iter(self) -> Self::IntoIter {
         self.iter_mut()
+    }
+}
+
+
+impl<'a, T> DoubleEndedIterator for ContainerIter<'a, T> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.iter.next_back()
+    }
+}
+
+
+impl<'a, T> DoubleEndedIterator for ContainerIterMut<'a, T> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.iter.next_back()
     }
 }

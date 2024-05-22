@@ -5,11 +5,15 @@ enum NameType {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Symbol { id: usize }
+pub struct Symbol { pub id: usize }
 pub struct SymbolMaker { names: Vec<NameType> }
 impl SymbolMaker {
     pub fn new() -> Self {
         Self { names: Vec::new() }
+    }
+
+    pub fn numsyms(&self) -> usize {
+        self.names.len()
     }
 
     pub fn fresh(&mut self, name: &str) -> Symbol {

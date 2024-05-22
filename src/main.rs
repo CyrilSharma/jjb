@@ -9,6 +9,8 @@ mod hoist;
 mod container;
 mod typeinfer;
 mod typetracker;
+mod optimizer;
+mod substitution;
 use typeinfer::typeinfer;
 use hoist::hoist;
 use converter::convert;
