@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use jjb::converter::convert;
 use jjb::ir::*;
+use jjb::parameters::Parameters;
 use jjb::symbolmaker::{Symbol, SymbolMaker};
 use jjb::printer::print;
 use tree_sitter::Parser;
@@ -111,9 +112,10 @@ fn test(source: &str, checker: impl Fn(CheckState, &SymbolMaker)) {
     parser.set_language(&tree_sitter_java::language()).expect("Error loading Java grammar");
     let tree = parser.parse(&source, None).unwrap();
     let mut sm = SymbolMaker::new();
-    let ast = convert(tree.root_node(), source.as_bytes(), &mut sm);
+    let params = Parameters { entry_name: "main".to_string(), entry_class: "Test".to_string() };
+    let ast = convert(tree.root_node(), source.as_bytes(), &params, &mut sm);
     let state: CheckState = census(&ast);
-    print(&ast, &sm);
+    print(&ast, &sm, &params);
     checker(state, &sm);
 }
 
@@ -220,7 +222,7 @@ test_classes!(classes_1, r#"
 "#, |c, sm| {
     let mut used = HashSet::new();
     for key in c.fun_apps.keys() {
-        let name = sm.uname(*key);
+        let name = sm.name(*key);
         match name.as_ref() {
             "Point" | "getx" | "gety" => { used.insert(key); },
             _ => ()
@@ -229,7 +231,7 @@ test_classes!(classes_1, r#"
 
     let mut def = HashSet::new();
     for key in c.fun_syms.keys() {
-        let name = sm.uname(*key);
+        let name = sm.name(*key);
         match name.as_ref() {
             "Point" | "getx" | "gety" => { def.insert(key); },
             _ => ()

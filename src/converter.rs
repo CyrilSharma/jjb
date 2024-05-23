@@ -7,7 +7,7 @@ use crate::ir::*;
 use crate::symbolmaker::{Symbol, SymbolMaker};
 use crate::tsretriever::TsRetriever;
 use crate::scope::Scope;
-use crate::typetracker::TypeTracker;
+use crate::parameters::Parameters;
 use tree_sitter::Node;
 
 struct State<'l> {
@@ -129,24 +129,35 @@ impl<'l> State<'l> {
     }
 }
 
-pub fn convert(root: Node, source: &[u8], sm: &mut SymbolMaker) -> Box<Tree> {
+pub fn convert(root: Node, source: &[u8], params: &Parameters, sm: &mut SymbolMaker) -> Box<Tree> {
     assert!(root.kind() == "program");
     let mut state = State::new(source, sm);
-    let entry_sym = add_declarations(root, &mut state, "main");
+    let entry_sym = add_declarations(root, &mut state, &params.entry_name, &params.entry_class);
     let mut res = statements(root.child(0).expect("Empty Program!"), &mut state);
     res.push_back(Tree::EntryPoint(entry_sym));
     Box::new(Tree::Program(res))
 }
 
 // TODO: support for enums!
-fn add_declarations<'l>(root: Node, state: &mut State, entry_name: &'l str) -> Symbol {
+fn add_declarations<'l>(root: Node, state: &mut State, entry_name: &'l str, entry_class: &'l str) -> Symbol {
     let mut entry_sym = None;
     let mut cursor = root.walk();
+    let mut csyms = Vec::new();
     for top in root.named_children(&mut cursor) {
         if top.kind() != "class_declaration" { continue }
         let cname = state.tsret.get_field_text(&top, "name");
         let csym = state.sm.fresh_reserved(cname);
         state.class_scope.insert(cname, csym);
+        state.type_map.insert(csym, Typ::Class(csym));
+        csyms.push(csym);
+    }
+
+    let mut index = 0;
+    for top in root.named_children(&mut cursor) {
+        if top.kind() != "class_declaration" { continue }
+        let csym = csyms[index];
+        let cname = state.sm.name(csym).to_owned();
+        index += 1;
 
         let mut methods = HashMap::new();
         let mut members = HashMap::new();
@@ -158,8 +169,11 @@ fn add_declarations<'l>(root: Node, state: &mut State, entry_name: &'l str) -> S
                 "enum_declaration" => panic!("Inner enums are not supported!"),
                 "method_declaration" | "constructor_declaration" => {
                     let fname = state.tsret.get_field_text(&child, "name");
-                    let fsym = state.sm.fresh_reserved(fname);
-                    if fname == entry_name { entry_sym = Some(fsym) }
+                    let constructor = child.kind() == "constructor_declaration";
+                    let reservecond = (fname == entry_name) || (cname == entry_class) || (constructor);
+                    let fsym = if reservecond { state.sm.fresh_reserved(fname) }
+                               else { state.sm.fresh(fname) };
+                    if fname == entry_name && cname == entry_class { entry_sym = Some(fsym) }
                     let type_child = child.child_by_field_name("type");
                     let rtyp = type_child.map_or_else(
                         || Typ::Class(csym),
@@ -725,6 +739,7 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
             let isym = state.var_scope.find(iname).or_else(||
                 state.class_scope.find(iname)
             );
+            println!("iname({}): isym({:?})", iname, isym);
             if let Some(sym) = isym {
                 (O::V(sym), state.type_map.get(&sym).cloned())   
             } else {

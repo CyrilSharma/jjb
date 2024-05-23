@@ -1,5 +1,7 @@
 use std::fs::{self, write};
 use std::process::Command;
+use jjb::optimizer::optimize;
+use jjb::parameters::Parameters;
 use jjb::printer::print;
 use jjb::hoist::hoist;
 use jjb::{converter::convert, ir::Tree, printer::str_print, symbolmaker::SymbolMaker};
@@ -24,90 +26,123 @@ macro_rules! classes_test {
     };
 }
 
-fn stash(fname: &str, content: &str) {
-    write(&format!("testfiles/{}", fname), content).expect("Write Failed!");
-}
-
-fn compile(fname: &str) {
-    let compile_output = Command::new("javac")
-        .arg(fname)
-        .current_dir("testfiles/")
-        .output()
-        .expect("Failed to execute 'javac' command");
-    let stderr = String::from_utf8_lossy(&compile_output.stderr).to_string();
-    assert!(
-        stderr.trim().is_empty(),
-        "stderr is not empty: {}",
-        stderr
-    );
-}
-
-fn execute(fname: &str) -> String {
-     let class_name = fname.trim_end_matches(".java");
-     let run_output = Command::new("java")
-         .arg(class_name)
-         .current_dir("testfiles/")
-         .output()
-         .expect("Failed to execute 'java' command");
-    let stdout = String::from_utf8_lossy(&run_output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&run_output.stderr).to_string();
-    assert!(
-        stderr.trim().is_empty(),
-        "stderr is not empty: {}",
-        stderr
-    );
-    stdout
-}
-
-fn execute_and_cache(fname: &str) -> String {
-    let res = execute(&fname);
-    let cache_path = format!("{}_cache.txt", fname);
-    stash(&cache_path, &res);
-    res
-}
-
-fn read_cache(fname: &str) -> Result<String, std::io::Error> {
-    let cache_path = format!("testfiles/{}_cache.txt", fname);
-    fs::read_to_string(cache_path)
-}
-
-fn purge_cache(fname: &str) {
-    let cache_path = format!("{}_cache.txt", fname);
-    stash(&cache_path, "");
-}
-
-fn _run(fname: &str, text: &str) -> String {
-    stash(fname, text);
-    compile(&fname);
-    execute_and_cache(fname)
-}
-
-fn run(fname: &str, text: &str) -> String {
-    let content = fs::read_to_string(format!("testfiles/{}", fname));
-    if let Ok(res) = content {
-        if res != text {
-            return _run(fname, text);
-        } else if let Ok(cache) = read_cache(&fname) {
-            return cache;
+struct JavaFileManager { base_dir: String }
+impl JavaFileManager {
+    /// Create a new JavaFileManager with the specified base directory.
+    fn new(base_dir: &str) -> Self {
+        JavaFileManager {
+            base_dir: base_dir.to_string(),
         }
     }
-    _run(fname, text)
+
+    /// Writes content to a file in its specified subdirectory.
+    fn stash_java(&self, fname: &str, content: &str) {
+        let dir = format!("{}/{}", self.base_dir, fname);
+        fs::create_dir_all(&dir).expect("Failed to create directory");
+        write(&format!("{}/{}.java", dir, fname), content).expect("Write Failed!");
+    }
+
+    /// Compiles the Java file located in its respective subdirectory.
+    fn compile_java(&self, fname: &str) {
+        let dir = format!("{}/{}", self.base_dir, fname);
+        let compile_output = Command::new("javac")
+            .arg(&format!("{}.java", fname))
+            .current_dir(&dir)
+            .output()
+            .expect("Failed to execute 'javac' command");
+        let stderr = String::from_utf8_lossy(&compile_output.stderr).to_string();
+        assert!(
+            stderr.trim().is_empty(),
+            "stderr is not empty: {}",
+            stderr
+        );
+    }
+
+    /// Executes the compiled Java class from its subdirectory.
+    fn execute_java(&self, fname: &str) -> String {
+        let dir = format!("{}/{}", self.base_dir, fname);
+        let run_output = Command::new("timeout")
+            .arg("1s")
+            .arg("java")
+            .arg(fname)
+            .current_dir(&dir)
+            .output()
+            .expect("Failed to execute 'java' command");
+
+        let stdout = String::from_utf8_lossy(&run_output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&run_output.stderr).to_string();
+        assert!(
+            run_output.status.success(),
+            "exit code is not 0: {}, stderr: {}",
+            run_output.status.code().unwrap_or_default(),
+            stderr
+        );
+        assert!(
+            stderr.trim().is_empty(),
+            "stderr is not empty: {}",
+            stderr
+        );
+        stdout
+    }
+
+    fn cache(&self, fname: &str, content: &str) {
+        let cache_path = format!("{}/{}_cache.txt", self.base_dir, fname);
+        write(cache_path, content).expect("Write Failed!");
+    }
+
+    /// Executes the Java file and caches the output.
+    fn execute_and_cache(&self, fname: &str) -> String {
+        let res = self.execute_java(fname);
+        self.cache(fname, &res);
+        res
+    }
+
+    /// Reads the cached output if available.
+    fn read_cache(&self, fname: &str) -> Result<String, std::io::Error> {
+        println!("I'm running!");
+        let cache_path = format!("{}/{}_cache.txt", self.base_dir, fname);
+        fs::read_to_string(cache_path)
+    }
+
+    /// Runs the process: stashes the file, compiles it, executes it, and caches the output.
+    fn _run(&self, fname: &str, text: &str) -> String {
+        self.stash_java(fname, text);
+        self.compile_java(fname);
+        self.execute_and_cache(fname)
+    }
+
+    /// Public method to run the Java file.
+    fn run(&self, fname: &str, text: &str) -> String {
+        let base_name = fname;
+        let content_path = format!("{}/{}/{}.java", self.base_dir, base_name, fname);
+        let content = fs::read_to_string(&content_path);
+        if let Ok(res) = content {
+            if res != text {
+                return self._run(fname, text);
+            } else if let Ok(cache) = self.read_cache(fname) {
+                return cache;
+            }
+        }
+        self._run(fname, text)
+    }
 }
 
-fn test_equal(source: &str, compile: &str, tree: &Tree, sm: &SymbolMaker, name: &str) {
-    let source_path = format!("{}_source.java", name);
-    let compile_path = format!("{}_compile.java", name);
+
+fn test_equal(source: &str, compile: &str, tree: &Tree, sm: &SymbolMaker, name: &str, params: &Parameters) {
+    let source_path = format!("{}_source", name);
+    let compile_path = format!("{}_compile", name);
     let mut buffer: Vec<u8> = Vec::new();
     buffer.reserve(compile.len());
-    str_print(tree, sm, &mut buffer);
+    str_print(tree, sm, &mut buffer, params);
     let buffer_str = std::str::from_utf8(&buffer).expect("Invalid UTF-8");
-    let res_source = run(&source_path, &source);
-    let res_compiled = run(&compile_path, &buffer_str);
+    let jfm = JavaFileManager::new("testfiles/");
+    let res_source = jfm.run(&source_path, &source);
+    let res_compiled = jfm.run(&compile_path, &buffer_str);
     if res_source != res_compiled {
         println!("------- SOURCE ------");
         println!("{}", source);
         println!("------- COMPILED ------");
-        print(tree, sm);
+        print(tree, sm, params);
         println!("----------------------");
         assert_eq!(res_source, res_compiled);
     }
@@ -118,10 +153,13 @@ fn test(name: &str, source: &str, compile: &str) {
     parser.set_language(&tree_sitter_java::language()).expect("Error loading Java grammar");
     let tree = parser.parse(compile, None).unwrap();
     let mut sm = SymbolMaker::new();
-    let mut ast = convert(tree.root_node(), compile.as_bytes(), &mut sm);
+    let class_name = format!("{}_compile", name);
+    let params = Parameters { entry_class: class_name, entry_name: "main".to_string() };
+    let mut ast = convert(tree.root_node(), compile.as_bytes(), &params, &mut sm);
     ast = hoist(ast.as_ref(), &mut sm);
+    ast = optimize(ast.as_ref(), &mut sm);
     typeinfer(ast.as_mut(), &mut sm);
-    test_equal(source, compile, &ast, &sm, name)
+    test_equal(source, compile, &ast, &sm, name, &params);
     // The other phases will come here...
 }
 
@@ -149,13 +187,13 @@ fn test_classes(name: &str, source: &str) {
     test(name, &format!(r#"
 public class {}_source {{
     public static void main(String[] args) {{
-        Test.main();
+        Test.start();
     }}
 }}
 {}"#, name, indented_source), &format!(r#"
 public class {}_compile {{
     public static void main(String[] args) {{
-        Test.main();
+        Test.start();
     }}
 }}
 {}"#, name, indented_source),
@@ -505,7 +543,7 @@ classes_test!(obj1, r#"
         }
     }
     class Test {
-        public static void main() {
+        public static void start() {
             int x = 0, y = 2;
             Point p = new Point(x, y);
             p.x = 4;
@@ -541,7 +579,7 @@ classes_test!(obj2, r#"
         }
     }
     class Test {
-        public static void main() {
+        public static void start() {
             int x = 0, y = 2;
             Point p = new Point(x, y);
             System.out.printf("%d\n", p.c.a);

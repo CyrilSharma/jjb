@@ -1,119 +1,115 @@
+use std::collections::HashMap;
+use crate::ir::{Tree, TreeContainer, Typ};
+use crate::container::*;
+use crate::substitution::Substitution;
+use crate::symbolmaker::{Symbol, SymbolMaker};
 
-use crate::ir::*;
-use crate::symbolmaker::SymbolMaker;
-pub struct State {
+#[derive(Clone)]
+struct FunDef {
+    body: TreeContainer,
+    args: Vec<Symbol>,
+    rtyp: Typ
+}
 
+struct InlineInfo {
+    label: Symbol,
+    object: Option<Symbol>,
+    name: Symbol
+}
+
+struct OptimizeState<'l> {
+    subst: Substitution<Symbol>,
+    census: HashMap<Symbol, usize>,
+    f_env: HashMap<Symbol, FunDef>,
+    l_env: HashMap<Symbol, TreeContainer>,
+    next: Option<ContainerIntoIter<Tree>>,
+    inline: Option<InlineInfo>,
+    sm: &'l mut SymbolMaker
+}
+
+impl<'l> OptimizeState<'l> {
+    pub fn new(census: HashMap<Symbol, usize>, sm: &'l mut SymbolMaker) -> Self {
+        Self {
+            census,
+            subst: Substitution::new(),
+            f_env: HashMap::new(),
+            l_env: HashMap::new(),
+            inline: None,
+            next: None,
+            sm
+        }
+    }
+
+    pub fn applied_once(&self, sym: Symbol) -> bool {
+        self.census.get(&sym).map(|c| *c == 1).unwrap_or(false)
+    }
+
+    pub fn dead(&self, sym: Symbol) -> bool {
+        self.census.get(&sym).map(|_| false).unwrap_or(true)
+    }
+
+    pub fn subst(&self, sym: Symbol) -> Symbol {
+        self.subst.subst(sym)
+    }
+
+    pub fn addf(&mut self, name: Symbol, f: FunDef) {
+        self.f_env.insert(name, f);
+    }
+
+    pub fn addc(&mut self, sym: Symbol) {
+        let mut cont = TreeContainer::new();
+        self.next.clone().map(|n| n.for_each(|c| cont.push_back(c.clone())));
+        self.l_env.insert(sym, cont);
+    }
+
+    pub fn with_inline<T>(&mut self, label: Symbol, name: Symbol,
+        object: Option<Symbol>, f: impl FnOnce(&mut OptimizeState) -> T) -> T {
+        let inline = Some(InlineInfo { label, object, name });
+        let stash = std::mem::replace(&mut self.inline, inline);
+        let res = f(self);
+        self.inline = stash;
+        res
+    }
+
+    pub fn withoutApps<T>(&mut self, f: impl FnOnce(&mut OptimizeState) -> T) -> T {
+        let f_env = std::mem::take(&mut self.f_env);
+        let l_env = std::mem::take(&mut self.l_env);
+        let res = f(self);
+        self.f_env = f_env;
+        self.l_env = l_env;
+        res
+    }
+
+    pub fn withSubst<T>(&mut self, args: Vec<Symbol>, nargs: Vec<Symbol>,
+        f: impl FnOnce(&mut OptimizeState) -> T) -> T {
+        // This can be made more efficient.
+        let subst = self.subst.clone();
+        for (arg, narg) in args.iter().zip(nargs.iter()) {
+            self.subst.add_subst(*arg, *narg)
+        }
+        let res = f(self);
+        self.subst = subst;
+        res
+    }
 }
 
 pub fn optimize(tree: &Tree, sm: &mut SymbolMaker) -> Box<Tree> {
-    todo!()
+    let cur = tree.clone();
+    shrink::shrink(cur, sm)
 }
 
 pub mod shrink {
-    use std::collections::HashMap;
-    use crate::container::*;
     use crate::ir::*;
-    use crate::substitution::Substitution;
-    use crate::symbolmaker::{Symbol, SymbolMaker};
-    use super::census::census;
-
-    #[derive(Clone)]
-    struct FunDef {
-        name: Symbol,
-        body: TreeContainer,
-        args: Vec<Symbol>
-    }
-
-    pub struct InlineInfo {
-        label: Symbol,
-        object: Option<Symbol>,
-        name: Symbol
-    }
-
-    pub struct State<'l> {
-        subst: Substitution<Symbol>,
-        census: HashMap<Symbol, usize>,
-        f_env: HashMap<Symbol, FunDef>,
-        l_env: HashMap<Symbol, TreeContainer>,
-        next: Option<ContainerIntoIter<Tree>>,
-        inline: Option<InlineInfo>,
-        sm: &'l mut SymbolMaker
-    }
-
-    impl<'l> State<'l> {
-        pub fn new(census: HashMap<Symbol, usize>, sm: &'l mut SymbolMaker) -> Self {
-            Self {
-                census,
-                subst: Substitution::new(),
-                f_env: HashMap::new(),
-                l_env: HashMap::new(),
-                inline: None,
-                next: None,
-                sm
-            }
-        }
-
-        pub fn applied_once(&self, sym: Symbol) -> bool {
-            self.census.get(&sym).map(|c| *c == 1).unwrap_or(false)
-        }
-
-        pub fn dead(&self, sym: Symbol) -> bool {
-            self.census.get(&sym).map(|c| false).unwrap_or(true)
-        }
-
-        pub fn subst(&self, sym: Symbol) -> Symbol {
-            self.subst.subst(sym)
-        }
-
-        pub fn add_subst(&mut self, a: Symbol, b: Symbol) {
-            self.subst.add_subst(a, b);
-        }
-
-        pub fn addf(&mut self, sym: Symbol, tc: &TreeContainer) {
-            self.f_env.insert(sym, FunDef {
-                args: Vec::new(), body: tc.clone()
-            });
-        }
-
-        pub fn addc(&mut self, sym: Symbol) {
-            let mut cont = TreeContainer::new();
-            self.next.clone().map(|n| n.for_each(|c| cont.push_back(c.clone())));
-            self.l_env.insert(sym, cont);
-        }
-
-        pub fn with_inline<T>(&mut self, label: Symbol, name: Symbol,
-            object: Option<Symbol>, f: impl FnOnce(&mut State) -> T) -> T {
-            let inline = Some(InlineInfo { label, object, name });
-            let stash = std::mem::replace(&mut self.inline, inline);
-            let res = f(self);
-            self.inline = stash;
-            res
-        }
-
-        pub fn withoutApps<T>(&mut self, f: impl FnOnce(&mut State) -> T) -> T {
-            let f_env = std::mem::take(&mut self.f_env);
-            let l_env = std::mem::take(&mut self.l_env);
-            let res = f(self);
-            self.f_env = f_env;
-            self.l_env = l_env;
-            res
-        }
-
-        pub fn withSubst<T>(&mut self, args: Vec<Symbol>, nargs: Vec<Symbol>,
-            f: impl FnOnce(&mut State) -> T) -> T {
-            // This can be made more efficient.
-            let subst = self.subst.clone();
-            for (arg, narg) in args.iter().zip(nargs.iter()) {
-                self.subst.add_subst(*arg, *narg)
-            }
-            let res = f(self);
-            self.subst = subst;
-            res
-        }
-    }
+    use crate::symbolmaker::{SymbolMaker, Symbol};
+    use super::census;
+    use super::{FunDef, OptimizeState as State};
 
     pub fn shrink(root: Tree, sm: &mut SymbolMaker) -> Box<Tree> {
-        let mut state = State::new(census(&root), sm);
+        let counts = census::census(&root);
+        for (sym, count) in &counts {
+            println!("{}: {}", sm.uname(*sym), *count);
+        }
+        let mut state = State::new(counts, sm);
         initialize_state(&root, &mut state);
         Box::new(Tree::Program(traverse(root, &mut state)))
     }
@@ -122,36 +118,38 @@ pub mod shrink {
         match root {
             Tree::Program(s) => for stmt in s { initialize_state(stmt, state) },
             Tree::LetC(c) => for method in &c.methods { initialize_state(method, state) }
-            Tree::LetF(f) => if state.applied_once(f.name) { state.addf(f.name, &f.body) }
+            Tree::LetF(f) => if state.applied_once(f.name) {
+                let args = f.args.iter().map(|(a, tp)| *a).collect();
+                state.addf(f.name, FunDef { body: f.body.clone(), args, rtyp: f.return_typ.clone() })
+            }
             _ => ()
         }
     }
 
     fn contdead(root: &Tree, state: &State) -> bool {
+        let f = |l: Symbol| (state.applied_once(l));
         match root {
-            Tree::Block(t) => state.dead(t.label),
-            Tree::Switch(t) => state.dead(t.label),
-            Tree::Loop(t) => state.dead(t.label),
-            Tree::If(t) => state.dead(t.label),
+            Tree::Block(t) => f(t.label),
+            Tree::Switch(t) => f(t.label),
+            Tree::Loop(t) => f(t.label),
+            Tree::If(t) => f(t.label),
             Tree::Return(_) | Tree::Break(_) |Tree::Continue(_) => true,
             _ => false
         }
     }
 
     // This would probably be cleaner if the next pointer of branchy code
-    // Was stored in that code itself. Probably not worth changing.
+    // Was stored in the tree itself. Probably not worth changing.
     fn traverselist(list: TreeContainer, state: &mut State) -> TreeContainer {
         let mut res = TreeContainer::new();
         let mut iter = list.into_iter();
         let mut cur = iter.next();
-        let mut next = iter.next();
         while let Some(stmt) = cur {
             state.next = Some(iter.clone());
             let cdead = contdead(&stmt, state);
             res.append(traverse(stmt, state));
             if cdead { break }
-            next = iter.next();
-            cur = next;
+            cur = iter.next();
         }
         state.next = None;
         res
@@ -163,7 +161,10 @@ pub mod shrink {
         match root {
             Tree::Program(stmts) => traverselist(stmts, state),
             Tree::LetI(_) => TreeContainer::make(root),
-            Tree::LetF(f) if state.dead(f.name) => TreeContainer::new(), 
+            Tree::LetF(f) if state.dead(f.name) => {
+                println!("Uh oh: {} is dead", state.sm.uname(f.name));
+                TreeContainer::new()
+            }, 
             Tree::LetF(f) => TreeContainer::make(Tree::LetF(FunDeclaration {
                 body: traverselist(f.body, state), ..f
             })),
@@ -174,31 +175,39 @@ pub mod shrink {
             })),
             Tree::LetE(_) => todo!(),
             Tree::LetP(PrimStatement { exp: None, ..}) => TreeContainer::make(root),
-            Tree::LetP(PrimStatement { exp: Some(Op::T(ExprTree { ref op, ref args })), name, ..})
-                if matches!(op, New | InvokeVirtual | InvokeStatic) => {
+            Tree::LetP(PrimStatement { exp: Some(Op::T(ExprTree { ref op, ref args })), ref name, .. })
+                if matches!(op, InvokeVirtual | InvokeStatic) => {
                 let idx = if matches!(op, New) { 0 } else { 1 };
-                let sym = match args[idx] { Op::V(sym) => sym, _ => panic!("Invalid Call") };
-                if let Some(f) = state.f_env.get(&sym).cloned() {
+                let fsym = match args[idx] { Op::V(sym) => sym, _ => panic!("Invalid Call") };
+                if let Some(f) = state.f_env.get(&fsym).cloned() {
                     let cargs = args.iter().map(|s| match s {
                         Op::V(sym) => state.subst(*sym),
                         _ => panic!("Function should only have symbolic arguments!")
                     }).collect();
                     let nargs = f.args.clone();
-                    let label = state.sm.refresh(&f.name);
+                    let funname = state.sm.name(fsym).to_owned();
+                    let label = state.sm.fresh(&funname);
                     let obj = if matches!(op, InvokeVirtual) {
-                        Some(match args[1] { Op::V(sym) => sym, _ => panic!("Invalid Call") })
+                        Some(match args[0] { Op::V(sym) => sym, _ => panic!("Invalid Call") })
                     } else {
                         None
                     };
-                    let bbody = state.with_inline(label, name, obj, |s|
-                        state.withoutApps(|s|
+
+                    // I think our substitution should be part of the environment.
+                    // It'll be a general Op to Op substitution, which will make it possible
+                    // To create Operands.
+                    // This is kind of horrible. Do this all in one function?
+                    let bbody = state.with_inline(label, *name, obj, |s|
+                        s.withoutApps(|s|
                             s.withSubst(cargs, nargs, |s|
                                 traverselist(f.body.clone(), s)
                             )
                         )
                     );
-                    // We wrap things in a block to handle multiple return statements.
-                    TreeContainer::make(Tree::Block(BlockStatement { label, bbody }))
+                    let mut list = TreeContainer::new();
+                    list.push_back(Tree::LetP(PrimStatement { name: *name, typ: f.rtyp.clone(), exp: None }));
+                    list.push_back(Tree::Block(BlockStatement { label, bbody }));
+                    list
                 } else {
                     TreeContainer::make(root)
                 }
@@ -256,7 +265,8 @@ pub mod shrink {
             // We wrap functions in a block and break from the block.
             // This is necessary to handle arbitrary control flow.
             Tree::Return(ReturnStatement { val: Some(e) }) if state.inline.is_some() => {
-                let inline = state.inline.unwrap();
+                println!("I ({:?}) executed!", e);
+                let inline = state.inline.as_ref().unwrap();
                 let mut res = TreeContainer::new();
                 res.push_back(Tree::LetP(PrimStatement {
                     name: state.sm.fresh("t"),
@@ -265,6 +275,10 @@ pub mod shrink {
                 }));
                 res.push_back(Tree::Break(inline.label));
                 res
+            },
+            Tree::Return(ReturnStatement { val: None }) if state.inline.is_some() => {
+                let inline = state.inline.as_ref().unwrap();
+                TreeContainer::make(Tree::Break(inline.label))
             },
             Tree::Return(_) => TreeContainer::make(root),
             Tree::Continue(_) => TreeContainer::make(root),
@@ -306,33 +320,7 @@ pub mod shrink {
     }
 }
 
-pub mod inline {
-    use std::collections::HashMap;
-    use crate::ir::*;
-    use crate::symbolmaker::Symbol;
-    pub struct State {
-        map: HashMap<Symbol, usize>
-    }
-    impl State {
-        pub fn new() -> Self {
-            Self { map: HashMap::new() }
-        }
-        pub fn inc(&mut self, sym: Symbol) {
-            if let Some(s) = self.map.get_mut(&sym) {
-                *s = *s + 1;
-            } else {
-                self.map.insert(sym, 1);
-            }
-        }
-    }
-    pub fn statement() {
-
-    }
-
-    pub fn operand() {
-
-    }
-}
+pub mod inline {}
 
 pub mod census {
     use std::collections::HashMap;
@@ -383,9 +371,9 @@ pub mod census {
             }
             Tree::Try(_) => todo!(),
             Tree::Return(r) => r.val.iter().for_each(|v| operand(&v, state)),
-            Tree::Continue(label) => state.inc(*label),
             Tree::Break(label) => state.inc(*label),
-            Tree::EntryPoint(sym) => state.inc(*sym)
+            Tree::EntryPoint(sym) => state.inc(*sym),
+            Tree::Continue(label) => (),
         }
     }
 
@@ -408,7 +396,9 @@ pub mod census {
                 [_, Operand::V(sym), rest @ ..] => state.inc(*sym),
                 _ => assert!(false, "Invalid Call operation!"),
             }
-            other => panic!("Invalid Operand: {:?}", other)
+            Operand::T(ExprTree { op, args }) => args.iter().for_each(|a| operand(a, state)),
+            Operand::A(_) => () /* todo!() */,
+            Operand::Tp(_) => ()
         }
     }
 }
@@ -430,7 +420,7 @@ pub mod size {
             Self { map: HashMap::new(), switch: false }
         }
         pub fn add(&mut self, sym: Symbol, size: usize) {
-            if !self.switch { self.add(sym, size) }
+            if self.switch { return }
             self.map.insert(sym, size);
         }
         fn switch(&mut self, f: impl FnOnce(&mut State) -> usize) -> usize {
@@ -448,7 +438,7 @@ pub mod size {
         state.map
     }
 
-    pub fn sum(list: &TreeContainer, state: &mut State) -> usize {
+    fn sum(list: &TreeContainer, state: &mut State) -> usize {
         list.iter().rfold(0, |acc, b| traverse(b, acc, state))
     }
 
@@ -505,7 +495,7 @@ pub mod size {
             O::This(_) => 1,
             O::Super(_) => 1,
             O::C(_) => 1,
-            O::V(sym) => 1, /* until we have SSA */
+            O::V(_) => 1,
             O::A(array) => match array {
                 A::Empty(bv) => bv.len(),
                 A::Initializer(a) => array_size(a.as_ref())

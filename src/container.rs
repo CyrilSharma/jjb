@@ -81,7 +81,6 @@ impl<'a, T> IntoIterator for &'a Container<T> {
 
 #[derive(Clone)]
 pub struct ContainerIntoIter<T> {
-    inner: std::collections::LinkedList<T>,
     current: Option<std::collections::linked_list::IntoIter<T>>,
 }
 
@@ -103,8 +102,7 @@ impl<T> IntoIterator for Container<T> {
 
     fn into_iter(self) -> Self::IntoIter {
         ContainerIntoIter {
-            current: Some(self.container.into_iter()),
-            inner: self.container,
+            current: Some(self.container.into_iter())
         }
     }
 }

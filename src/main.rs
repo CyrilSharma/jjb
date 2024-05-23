@@ -11,11 +11,14 @@ mod typeinfer;
 mod typetracker;
 mod optimizer;
 mod substitution;
+mod parameters;
 use typeinfer::typeinfer;
 use hoist::hoist;
 use converter::convert;
 use symbolmaker::SymbolMaker;
 use tree_sitter::{Parser, TreeCursor};
+use parameters::Parameters;
+use optimizer::optimize;
 
 fn print_tree(mut cursor: TreeCursor, depth: usize) {
     let node = cursor.node();
@@ -51,7 +54,9 @@ fn main() {
     print_tree(tree.walk(), 0);
     println!("{}", tree.root_node());
     let mut sm = SymbolMaker::new();
-    let mut ast = convert(tree.root_node(), source.as_bytes(), &mut sm);
+    let params = Parameters { entry_class: "".to_string(), entry_name: "main".to_string() };
+    let mut ast = convert(tree.root_node(), source.as_bytes(), &params, &mut sm);
     ast = hoist(ast.as_ref(), &mut sm);
+    ast = optimize(ast.as_ref(), &mut sm);
     typeinfer(ast.as_mut(), &mut sm);
 }

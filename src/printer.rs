@@ -1,26 +1,28 @@
 use std::borrow::Cow;
 use crate::ir::*;
+use crate::parameters::Parameters;
 use crate::symbolmaker::{Symbol, SymbolMaker};
 use std::io::{self, Write};
 
 #[allow(dead_code)]
-pub fn print(tree: &Tree, sm: &SymbolMaker) {
+pub fn print(tree: &Tree, sm: &SymbolMaker, params: &Parameters) {
     let stdout = io::stdout();
     let handle = stdout.lock();
-    let mut state = PrintState { level: 0, sm, buf: handle };
+    let mut state = PrintState { level: 0, sm, buf: handle, params };
     print_tree(tree, &mut state);
 }
 
 #[allow(dead_code)]
-pub fn str_print(tree: &Tree, sm: &SymbolMaker, buf: &mut Vec<u8>) {
-    let mut state = PrintState { level: 0, sm, buf };
+pub fn str_print(tree: &Tree, sm: &SymbolMaker, buf: &mut Vec<u8>, params: &Parameters) {
+    let mut state = PrintState { level: 0, sm, buf, params };
     print_tree(tree, &mut state);
 }
 
 struct PrintState<'l, W: Write> {
     level: u32,
     sm: &'l SymbolMaker,
-    buf: W
+    buf: W,
+    params: &'l Parameters
 }
 
 impl<'l, W: Write> PrintState<'l, W> {
@@ -85,7 +87,9 @@ fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
             state.println("}");
         },
         Tree::LetC(ClassDeclaration { name, members, methods, extends }) => {
-            let mut header = format!("class {}", state.uname(*name));
+            let mut header = "".to_string();
+            if state.params.entry_class == state.sm.name(*name) { header.push_str("public ") }
+            header.push_str(&format!("class {}", state.uname(*name)));
             if let Some(e) = extends {
                 header.push_str(&format!(" extends {}", &state.uname(*e)));
             }
