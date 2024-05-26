@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::symbolmaker::Symbol;
+use crate::symbolmanager::Symbol;
 
 pub struct Scope<'l> {
     table: Vec<HashMap<&'l str, Symbol>>

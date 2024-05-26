@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 
 use crate::ir::*;
-use crate::symbolmaker::{Symbol, SymbolMaker};
+use crate::symbolmanager::{Symbol, SymbolManager};
 
 struct State<'l> {
-    sm: &'l mut SymbolMaker,
+    sm: &'l mut SymbolManager,
     cont_header: HashMap<Symbol, TreeContainer>
 }
 
 impl<'l> State<'l> {
-    fn new(sm: &'l mut SymbolMaker) -> Self {
+    fn new(sm: &'l mut SymbolManager) -> Self {
         State { sm, cont_header: HashMap::new() }
     }
 }
@@ -23,7 +23,7 @@ fn wrap_prim(mut list: TreeContainer, exp: Operand, state: &mut State) -> (TreeC
     (list, Operand::V(name))
 }
 
-pub fn hoist(root: &Tree, sm: &mut SymbolMaker) -> Box<Tree> {
+pub fn hoist(root: &Tree, sm: &mut SymbolManager) -> Box<Tree> {
     let mut state = State::new(sm);
     Box::new(Tree::Program(statement(root, &mut state)))
 }

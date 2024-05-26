@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::symbolmaker::Symbol;
+use crate::symbolmanager::Symbol;
 
 pub struct Dirent<'l> {
     members: HashMap<&'l str, Symbol>,

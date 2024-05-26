@@ -1,11 +1,11 @@
 use std::borrow::Cow;
 use crate::ir::*;
 use crate::parameters::Parameters;
-use crate::symbolmaker::{Symbol, SymbolMaker};
+use crate::symbolmanager::{Symbol, SymbolManager};
 use std::io::{self, Write};
 
 #[allow(dead_code)]
-pub fn print(tree: &Tree, sm: &SymbolMaker, params: &Parameters) {
+pub fn print(tree: &Tree, sm: &SymbolManager, params: &Parameters) {
     let stdout = io::stdout();
     let handle = stdout.lock();
     let mut state = PrintState { level: 0, sm, buf: handle, params };
@@ -13,14 +13,14 @@ pub fn print(tree: &Tree, sm: &SymbolMaker, params: &Parameters) {
 }
 
 #[allow(dead_code)]
-pub fn str_print(tree: &Tree, sm: &SymbolMaker, buf: &mut Vec<u8>, params: &Parameters) {
+pub fn str_print(tree: &Tree, sm: &SymbolManager, buf: &mut Vec<u8>, params: &Parameters) {
     let mut state = PrintState { level: 0, sm, buf, params };
     print_tree(tree, &mut state);
 }
 
 struct PrintState<'l, W: Write> {
     level: u32,
-    sm: &'l SymbolMaker,
+    sm: &'l SymbolManager,
     buf: W,
     params: &'l Parameters
 }
@@ -254,9 +254,9 @@ fn serialize_op(op: &Operand, state: &mut PrintState<'_, impl Write>) -> String 
 }
 
 fn serialize_array(optyp: &Operand, op: &Operand, state: &mut PrintState<'_, impl Write>) -> String {
-    let tp = if let Operand::Tp(t) = optyp { t } else { panic!("Unknown Array Tp!") };
+    let asym = if let Operand::Tp(Typ::Array(asym)) = optyp { asym } else { panic!("Unknown Array Type!") };
     let array = if let Operand::A(array) = op { array } else { panic!("Unknown Array Op") };
-    let (eltype, dims) = if let Typ::Array(ArrayTyp { eltype, dims }) = tp
+    let (eltype, dims) = if let Some(ArrayTyp { eltype, dims }) = state.sm.arraytyp(*asym)
         { (eltype, dims) } else { panic!("Invalid Array") };
     match array {
         ArrayExpression::Empty(aempty_box) => {
@@ -270,7 +270,7 @@ fn serialize_array(optyp: &Operand, op: &Operand, state: &mut PrintState<'_, imp
             )
         }
         ArrayExpression::Initializer(initial_box) => format!("new {}{}",
-            serialize_tp(&tp, state),
+            serialize_tp(&Typ::Array(*asym), state),
             serialize_array_initializer(initial_box.as_ref(), state)
         )
     }
@@ -349,10 +349,14 @@ fn serialize_tp(tp: &Typ, state: &mut PrintState<'_, impl Write>) -> Cow<'static
         T::Float => B("float"),
         T::Double => B("double"),
         T::Str => B("String"),
-        T::Array(ArrayTyp { eltype, dims }) =>  O(format!("{}{}",
-            serialize_tp(eltype, state),
-            "[]".repeat(*dims as usize)
-        )),
+        T::Array(asym) => {
+            if let Some(ArrayTyp { eltype, dims }) = state.sm.arraytyp(*asym) {
+                O(format!("{}{}", serialize_tp(eltype, state),
+                    "[]".repeat(*dims as usize)))
+            } else {
+                panic!("Unknown ArrayType")
+            }
+        },
         T::Class(s) => O(state.uname(*s))
     }
 }

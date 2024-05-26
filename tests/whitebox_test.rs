@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use jjb::converter::convert;
 use jjb::ir::*;
 use jjb::parameters::Parameters;
-use jjb::symbolmaker::{Symbol, SymbolMaker};
+use jjb::symbolmanager::{Symbol, SymbolManager};
 use jjb::printer::print;
 use tree_sitter::Parser;
 
@@ -107,11 +107,11 @@ fn operand(op: &Operand, state: &mut CheckState) {
 }
 
 
-fn test(source: &str, checker: impl Fn(CheckState, &SymbolMaker)) {
+fn test(source: &str, checker: impl Fn(CheckState, &SymbolManager)) {
     let mut parser = Parser::new();
     parser.set_language(&tree_sitter_java::language()).expect("Error loading Java grammar");
     let tree = parser.parse(&source, None).unwrap();
-    let mut sm = SymbolMaker::new();
+    let mut sm = SymbolManager::new();
     let params = Parameters { entry_name: "main".to_string(), entry_class: "Test".to_string() };
     let ast = convert(tree.root_node(), source.as_bytes(), &params, &mut sm);
     let state: CheckState = census(&ast);

@@ -1,16 +1,15 @@
 use std::collections::HashMap;
 
-use crate::directory::Directory;
 use crate::ir::*;
-use crate::symbolmaker::{Symbol, SymbolMaker};
+use crate::symbolmanager::{Symbol, SymbolManager};
 
 struct State<'l> {
-    sm: &'l mut SymbolMaker,
+    sm: &'l mut SymbolManager,
     typemap: HashMap<Symbol, Typ>
 }
 
 impl<'l> State<'l> {
-    pub fn new(sm: &'l mut SymbolMaker) -> Self {
+    pub fn new(sm: &'l mut SymbolManager) -> Self {
         Self {
             sm,
             typemap: HashMap::new()
@@ -18,7 +17,7 @@ impl<'l> State<'l> {
     }
 }
 
-pub fn typeinfer(tree: &mut Tree, sm: &mut SymbolMaker) {
+pub fn typeinfer(tree: &mut Tree, sm: &mut SymbolManager) {
     let mut state = State::new(sm);
     initialize_directory(tree, &mut state);
     statement(tree, &mut state);
@@ -171,11 +170,15 @@ fn operand(op: &mut Operand, state: &mut State) -> Typ {
                     O::T(_) => Typ::Unknown,
                 }
             }
-            Index if args.len() == 2 => {
-                match operand(&mut args[0], state) {
-                    Typ::Array(ArrayTyp { eltype, dims }) => *eltype,
-                    _ => panic!("Invalid access")
-                }
+            Index if args.len() == 2 => match operand(&mut args[0], state) {
+                Typ::Array(asym) => {
+                    if let Some(ArrayTyp { eltype, dims }) = state.sm.arraytyp(asym) {
+                        *eltype
+                    } else {
+                        panic!("")
+                    }
+                },
+                _ => panic!("Invalid access")
             },
             operator => panic!(
                 "Unhandled Operator {:?} with nargs: {:?}",

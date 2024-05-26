@@ -4,7 +4,7 @@ use jjb::optimizer::optimize;
 use jjb::parameters::Parameters;
 use jjb::printer::print;
 use jjb::hoist::hoist;
-use jjb::{converter::convert, ir::Tree, printer::str_print, symbolmaker::SymbolMaker};
+use jjb::{converter::convert, ir::Tree, printer::str_print, symbolmanager::SymbolManager};
 use jjb::typeinfer::typeinfer;
 use tree_sitter::Parser;
 
@@ -128,7 +128,7 @@ impl JavaFileManager {
 }
 
 
-fn test_equal(source: &str, compile: &str, tree: &Tree, sm: &SymbolMaker, name: &str, params: &Parameters) {
+fn test_equal(source: &str, compile: &str, tree: &Tree, sm: &SymbolManager, name: &str, params: &Parameters) {
     let source_path = format!("{}_source", name);
     let compile_path = format!("{}_compile", name);
     let mut buffer: Vec<u8> = Vec::new();
@@ -152,7 +152,7 @@ fn test(name: &str, source: &str, compile: &str) {
     let mut parser = Parser::new();
     parser.set_language(&tree_sitter_java::language()).expect("Error loading Java grammar");
     let tree = parser.parse(compile, None).unwrap();
-    let mut sm = SymbolMaker::new();
+    let mut sm = SymbolManager::new();
     let class_name = format!("{}_compile", name);
     let params = Parameters { entry_class: class_name, entry_name: "main".to_string() };
     let mut ast = convert(tree.root_node(), compile.as_bytes(), &params, &mut sm);

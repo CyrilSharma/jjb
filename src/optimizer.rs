@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use crate::ir::{Tree, TreeContainer, Typ};
 use crate::container::*;
 use crate::substitution::Substitution;
-use crate::symbolmaker::{Symbol, SymbolMaker};
+use crate::symbolmanager::{Symbol, SymbolManager};
 
 #[derive(Clone)]
 struct FunDef {
@@ -24,11 +24,11 @@ struct OptimizeState<'l> {
     l_env: HashMap<Symbol, TreeContainer>,
     next: Option<ContainerIntoIter<Tree>>,
     inline: Option<InlineInfo>,
-    sm: &'l mut SymbolMaker
+    sm: &'l mut SymbolManager
 }
 
 impl<'l> OptimizeState<'l> {
-    pub fn new(census: HashMap<Symbol, usize>, sm: &'l mut SymbolMaker) -> Self {
+    pub fn new(census: HashMap<Symbol, usize>, sm: &'l mut SymbolManager) -> Self {
         Self {
             census,
             subst: Substitution::new(),
@@ -93,18 +93,18 @@ impl<'l> OptimizeState<'l> {
     }
 }
 
-pub fn optimize(tree: &Tree, sm: &mut SymbolMaker) -> Box<Tree> {
+pub fn optimize(tree: &Tree, sm: &mut SymbolManager) -> Box<Tree> {
     let cur = tree.clone();
     shrink::shrink(cur, sm)
 }
 
 pub mod shrink {
     use crate::ir::*;
-    use crate::symbolmaker::{SymbolMaker, Symbol};
+    use crate::symbolmanager::{SymbolManager, Symbol};
     use super::census;
     use super::{FunDef, OptimizeState as State};
 
-    pub fn shrink(root: Tree, sm: &mut SymbolMaker) -> Box<Tree> {
+    pub fn shrink(root: Tree, sm: &mut SymbolManager) -> Box<Tree> {
         let counts = census::census(&root);
         for (sym, count) in &counts {
             println!("{}: {}", sm.uname(*sym), *count);
@@ -325,7 +325,7 @@ pub mod inline {}
 pub mod census {
     use std::collections::HashMap;
     use crate::ir::*;
-    use crate::symbolmaker::Symbol;
+    use crate::symbolmanager::Symbol;
     pub struct Census {
         map: HashMap<Symbol, usize>
     }
@@ -409,7 +409,7 @@ pub mod census {
 pub mod size {
     use std::collections::HashMap;
     use crate::ir::*;
-    use crate::symbolmaker::Symbol;
+    use crate::symbolmanager::Symbol;
     struct State {
         map: HashMap<Symbol, usize>,
         switch: bool
@@ -501,7 +501,7 @@ pub mod size {
                 A::Initializer(a) => array_size(a.as_ref())
             }
             O::T(ExprTree { op: ArrayNew, args }) => match args.as_slice() {
-                [O::Tp(Typ::Array(ArrayTyp { eltype, dims })), a] => operand(a),
+                [O::Tp(Typ::Array(_)), a] => operand(a),
                 _ => panic!("Invalid Array Expression!")
             }
             O::T(ExprTree { op: New, args }) => args.len(),

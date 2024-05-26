@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use crate::directory::Directory;
 use crate::ir::*;
-use crate::symbolmaker::{Symbol, SymbolMaker};
+use crate::symbolmanager::{Symbol, SymbolManager};
 use crate::tsretriever::TsRetriever;
 use crate::scope::Scope;
 use crate::parameters::Parameters;
@@ -21,11 +21,11 @@ struct State<'l> {
     break_label: Option<Symbol>,
     continue_label: Option<Symbol>,
     label: Option<Symbol>,
-    sm: &'l mut SymbolMaker
+    sm: &'l mut SymbolManager
 }
 
 impl<'l> State<'l> {
-    pub fn new(source: &'l [u8], sm: &'l mut SymbolMaker) -> Self {
+    pub fn new(source: &'l [u8], sm: &'l mut SymbolManager) -> Self {
         Self {
             class_sym: None,
             var_scope: Scope::new(),
@@ -75,12 +75,12 @@ impl<'l> State<'l> {
         return None
     }
 
-    pub fn get_typ(&self, node: &Node) -> Typ {
+    pub fn get_typ(&mut self, node: &Node) -> Typ {
         let typ_node = self.tsret.get_field(node, "type");
         self.get_typ_raw(&typ_node)
     }
 
-    pub fn get_typ_raw(&self, typ_node: &Node) -> Typ {
+    pub fn get_typ_raw(&mut self, typ_node: &Node) -> Typ {
         match typ_node.kind() {
             "void_type" => Typ::Void,
             "integral_type" => match self.tsret.get_text(&typ_node) {
@@ -99,11 +99,11 @@ impl<'l> State<'l> {
             }
 
             "array_type" => {
-                let eltyp = self.get_typ_raw(&self.tsret.get_field(&typ_node, "element"));
+                let eltype = self.get_typ_raw(&self.tsret.get_field(&typ_node, "element"));
                 let dims = self.tsret.get_dims(
                     &self.tsret.get_field(&typ_node, "dimensions")
                 );
-                Typ::Array(ArrayTyp { eltype: Box::new(eltyp), dims })
+                Typ::Array(self.sm.fresh_array("a", ArrayTyp { eltype, dims }))
             },
 
             "type_identifier" => {
@@ -129,7 +129,7 @@ impl<'l> State<'l> {
     }
 }
 
-pub fn convert(root: Node, source: &[u8], params: &Parameters, sm: &mut SymbolMaker) -> Box<Tree> {
+pub fn convert(root: Node, source: &[u8], params: &Parameters, sm: &mut SymbolManager) -> Box<Tree> {
     assert!(root.kind() == "program");
     let mut state = State::new(source, sm);
     let entry_sym = add_declarations(root, &mut state, &params.entry_name, &params.entry_class);
@@ -614,10 +614,9 @@ fn local_variable_declaration(node: Node, state: &mut State) -> TreeContainer {
         state.var_scope.insert(name_str, name_sym);
         let dim_res = cur.child_by_field_name("dimensions");
         let el_tp = if let Some(dim_cur) = dim_res {
-            Typ::Array(ArrayTyp {
-                eltype: Box::new(tp.clone()),
-                dims: state.tsret.get_dims(&dim_cur)
-            })
+            Typ::Array(state.sm.fresh_array("a", ArrayTyp {
+                eltype: tp, dims: state.tsret.get_dims(&dim_cur)
+            }))
         } else {
             tp.clone()
         };
@@ -804,8 +803,17 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
             let (arr, arr_type) = type_expression(state.tsret.get_field(&node, "array"), state);
             let index = expression(state.tsret.get_field(&node, "index"), state);
             let rtyp = arr_type.map(|tp| match tp {
-                Typ::Array(ArrayTyp { eltype, dims }) => if dims == 1 { *eltype } else {
-                    Typ::Array(ArrayTyp { eltype, dims: dims - 1 })
+                Typ::Array(asym) => {
+                    if let Some(ArrayTyp { eltype, dims }) = state.sm.arraytyp(asym) {
+                        if *dims == 0 { *eltype }
+                        else {
+                            Typ::Array(state.sm.fresh_array("a", ArrayTyp {
+                                eltype: *eltype, dims: *dims - 1
+                            }))
+                        }
+                    } else {
+                        panic!("Unknown ArrayType!")
+                    }
                 },
                 other => panic!("Invalid array access on {:?}", other)
             });
@@ -852,8 +860,10 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
                 }
             }
             
-            let eltype = Box::new(state.get_typ(&node));
-            let tp = Typ::Array(ArrayTyp { eltype, dims: ndims });
+            let eltype = state.get_typ(&node);
+            let tp = Typ::Array(state.sm.fresh_array("a", ArrayTyp {
+                eltype, dims: ndims
+            }));
             let value_node = node.child_by_field_name("value");
             let a = if let Some(vnode) = value_node {
                 O::A(ArrayExpression::Initializer(

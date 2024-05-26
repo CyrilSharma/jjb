@@ -1,9 +1,8 @@
-use std::borrow::Cow;
 use std::fmt;
 use crate::container::Container;
-use crate::symbolmaker::Symbol;
+use crate::symbolmanager::Symbol;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Typ {
     Unknown,
     Void,
@@ -16,9 +15,26 @@ pub enum Typ {
     Float,
     Double,
     Str,
-    // I want this to be a symbol too...
-    Array(ArrayTyp), 
+    Array(Symbol), 
     Class(Symbol)
+}
+
+pub struct ArrayTyp {
+    pub eltype: Typ,
+    pub dims: u8
+}
+
+
+// Methods are not considered part of the Type.
+pub struct ClassTyp {
+    pub members: Vec<Symbol>,
+    pub types: Vec<Typ>
+}
+
+// Methods are not considered part of the Type.
+pub struct EnumTyp {
+    pub members: Vec<Symbol>,
+    pub types: Vec<Typ>
 }
 
 impl Typ {
@@ -33,12 +49,6 @@ impl Typ {
             _ => 0
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ArrayTyp {
-    pub eltype: Box<Typ>,
-    pub dims: u8
 }
 
 pub type ArrayInitializer = Vec<Box<ElementInitializer>>;
