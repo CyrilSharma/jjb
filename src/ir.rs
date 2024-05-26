@@ -25,16 +25,13 @@ pub struct ArrayTyp {
 }
 
 
-// Methods are not considered part of the Type.
+// Unsure if methods should be part of the type.
 pub struct ClassTyp {
-    pub members: Vec<Symbol>,
-    pub types: Vec<Typ>
+    pub members: Vec<(Symbol, Typ)>
 }
 
-// Methods are not considered part of the Type.
 pub struct EnumTyp {
-    pub members: Vec<Symbol>,
-    pub types: Vec<Typ>
+    pub members: Vec<(Symbol, Typ)>
 }
 
 impl Typ {

@@ -103,7 +103,7 @@ impl<'l> State<'l> {
                 let dims = self.tsret.get_dims(
                     &self.tsret.get_field(&typ_node, "dimensions")
                 );
-                Typ::Array(self.sm.fresh_array("a", ArrayTyp { eltype, dims }))
+                Typ::Array(self.sm.fresh_array(ArrayTyp { eltype, dims }))
             },
 
             "type_identifier" => {
@@ -161,6 +161,7 @@ fn add_declarations<'l>(root: Node, state: &mut State, entry_name: &'l str, entr
 
         let mut methods = HashMap::new();
         let mut members = HashMap::new();
+        let mut typed_members = Vec::new();
         let body = state.tsret.get_field(&top, "body");
         let mut bcursor = body.walk();
         for child in body.named_children(&mut bcursor) { 
@@ -193,10 +194,12 @@ fn add_declarations<'l>(root: Node, state: &mut State, entry_name: &'l str, entr
                     members.insert(name, var_sym).map(
                         |_| panic!("member {} appears more then once", name)
                     );
+                    typed_members.push((var_sym, typ));
                 },
                 other => panic!("Parse Tree uses unknown node {}\n", other)
             }
         }
+        state.sm.add_class(csym, ClassTyp { members: typed_members });
         state.directory.add_class(csym, methods, members);
     }
     entry_sym.expect("The entry symbol was not found!")
@@ -614,7 +617,7 @@ fn local_variable_declaration(node: Node, state: &mut State) -> TreeContainer {
         state.var_scope.insert(name_str, name_sym);
         let dim_res = cur.child_by_field_name("dimensions");
         let el_tp = if let Some(dim_cur) = dim_res {
-            Typ::Array(state.sm.fresh_array("a", ArrayTyp {
+            Typ::Array(state.sm.fresh_array(ArrayTyp {
                 eltype: tp, dims: state.tsret.get_dims(&dim_cur)
             }))
         } else {
@@ -807,7 +810,7 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
                     if let Some(ArrayTyp { eltype, dims }) = state.sm.arraytyp(asym) {
                         if *dims == 0 { *eltype }
                         else {
-                            Typ::Array(state.sm.fresh_array("a", ArrayTyp {
+                            Typ::Array(state.sm.fresh_array(ArrayTyp {
                                 eltype: *eltype, dims: *dims - 1
                             }))
                         }
@@ -861,7 +864,7 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
             }
             
             let eltype = state.get_typ(&node);
-            let tp = Typ::Array(state.sm.fresh_array("a", ArrayTyp {
+            let tp = Typ::Array(state.sm.fresh_array(ArrayTyp {
                 eltype, dims: ndims
             }));
             let value_node = node.child_by_field_name("value");

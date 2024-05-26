@@ -174,7 +174,7 @@ pub mod shrink {
                 methods: traverselist(c.methods, state), ..c
             })),
             Tree::LetE(_) => todo!(),
-            Tree::LetP(PrimStatement { exp: None, ..}) => TreeContainer::make(root),
+            Tree::LetP(PrimStatement { exp: None, .. }) => TreeContainer::make(root),
             Tree::LetP(PrimStatement { exp: Some(Op::T(ExprTree { ref op, ref args })), ref name, .. })
                 if matches!(op, InvokeVirtual | InvokeStatic) => {
                 let idx = if matches!(op, New) { 0 } else { 1 };
@@ -193,9 +193,18 @@ pub mod shrink {
                         None
                     };
 
-                    // I think our substitution should be part of the environment.
-                    // It'll be a general Op to Op substitution, which will make it possible
-                    // To create Operands.
+                    let mut list = TreeContainer::new();
+                    // if matches!(op, New) {
+                    //     let csym = match args[0] { Op::V(csym) => csym, _ => panic!("Invalid New!") };
+                    //     let ctyp = state.sm.classtyp(csym).expect("Class Type isn't defined!");
+                    //     let members: Vec<_> = ctyp.members.clone();
+                    //     for (sym, typ) in members.iter() {
+                    //         let name = state.sm.refresh(&sym);
+                    //         list.push_back(Tree::LetP(PrimStatement {
+                    //             name, typ: *typ, exp: None
+                    //         }));
+                    //     }
+                    // }
                     // This is kind of horrible. Do this all in one function?
                     let bbody = state.with_inline(label, *name, obj, |s|
                         s.withoutApps(|s|
@@ -204,7 +213,6 @@ pub mod shrink {
                             )
                         )
                     );
-                    let mut list = TreeContainer::new();
                     list.push_back(Tree::LetP(PrimStatement { name: *name, typ: f.rtyp.clone(), exp: None }));
                     list.push_back(Tree::Block(BlockStatement { label, bbody }));
                     list
