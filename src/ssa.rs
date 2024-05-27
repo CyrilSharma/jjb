@@ -18,7 +18,7 @@ pub struct CfgNode {
 #[allow(unused)]
 pub fn print_graph(nodes: &[CfgNode], sm: &SymbolManager) {
     println!("digraph G {{");
-    println!(r#"  node [shape=box, fontname="Helvetica", fontsize=12]"#);
+    println!(r#"  node [shape=box, fontname="Helvetica", fontsize=12, ordering="out"]"#);
     for node in nodes {
         let res = node.content.iter().map(|n| format!(
             "      <tr><td>{}</td></tr>",
@@ -138,13 +138,16 @@ mod build {
                     let (nhead, ntails) = build_graph(next, state);
                     let mut ncases = Vec::new();
                     let mut children = Vec::new();
+                    let mut prev: Option<Box<[Id]>> = None;
                     for (ops, content) in cases {
                         let (head, tails) = build_graph(content.into_iter(), state);
-                        state.connect(&tails, nhead);
+                        if let Some(p) = prev { state.connect(&p, head) };
                         children.push(head);
                         ncases.push((ops, TreeContainer::new()));
+                        prev = Some(tails);
                     }
                     let (dhead, dtails) = build_graph(default.into_iter(), state);
+                    if let Some(p) = prev { state.connect(&p, dhead) };
                     state.connect(&dtails, nhead);
                     children.push(dhead);
                     content.push_back(Tree::Switch(SwitchStatement {
@@ -180,7 +183,6 @@ mod build {
                         bfalse: TreeContainer::new(),
                     }));
                     state.alloc.set(nid, content, vec![thead, fhead]);
-                    println!("nhead: {}", nhead);
                     return (nid, ntails);
                 },
                 Tree::Return(r) => {
@@ -226,21 +228,17 @@ mod test {
         let text = r#"
         public class Test {
             public static void main(String[] args) {
-                int i = 0, j = 0, k = 0;
-                label1: while (i++ < 10) {
-                    label2: while (j++ < 10) {
-                        label3: while (k++ < 10) {
-                            System.out.printf("%d %d %d\n", i, j, k);
-                            if ((i ^ j) < (i ^ k)) {
-                                continue label2;
-                            }
-                            if (i < 4) { continue label1; }
-                            break label3;
-                        }
-                        if (j > 3) { continue label2; }
-                        break label1;
+                int cnt = 0;
+                while (cnt++ < 50) {
+                    switch (cnt % 5) {
+                        case 0: do { cnt++; } while (cnt < 10);
+                        case 1: break;
+                        case 2: do { cnt++; } while (cnt < 1);;
+                        case 3: continue;
+                        case 4: cnt *= cnt;
                     }
                 }
+                System.out.println(cnt);
             }
         }
         "#;
@@ -253,7 +251,7 @@ mod test {
         let params = Parameters { entry_class: class_name, entry_name: "main".to_string() };
         let mut ast = convert(tree.root_node(), text.as_bytes(), &params, &mut sm);
         ast = hoist(ast.as_ref(), &mut sm);
-        ast = optimize(ast.as_ref(), &mut sm);
+        // ast = optimize(ast.as_ref(), &mut sm);
         typeinfer(ast.as_mut(), &mut sm);
         match ast.as_ref() {
             Tree::Program(p) => match p.iter().next().expect("") {

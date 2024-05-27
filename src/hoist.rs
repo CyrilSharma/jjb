@@ -78,7 +78,8 @@ fn statement(root: &Tree, state: &mut State) -> TreeContainer {
                 for s in code { newcode.append(statement(&s, state)) }
                 cases.push((ops.clone(), newcode));
             }
-            head.push_back(Tree::Switch(SwitchStatement { cases, arg, ..sstmt.clone() }));
+            let default = tail(sstmt.default.clone(), Tree::Break(sstmt.label));
+            head.push_back(Tree::Switch(SwitchStatement { cases, arg, default, label: sstmt.label }));
             head
         },
         Tree::Loop(lstmt) => {
