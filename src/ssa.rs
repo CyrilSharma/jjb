@@ -172,8 +172,7 @@ mod build {
                     content.push_back(Tree::Loop(LoopStatement {
                         cond, label, lbody: TreeContainer::new(), dowhile
                     }));
-                    let children = if !dowhile { vec![lhead, nhead] }
-                        else { vec![lhead] };
+                    let children = vec![lhead];
                     state.alloc.set(nid, content, children);
                     return (nid, ntails);
                 },
