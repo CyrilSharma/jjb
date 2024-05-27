@@ -84,18 +84,25 @@ mod build {
     use super::*;
     struct State<'l> {
         alloc: &'l mut Allocator,
-        label_map: HashMap<Symbol, Id>
+        label_map: HashMap<Symbol, Id>,
+        break_map: HashMap<Symbol, Id>
     }
     
     impl<'l> State<'l> {
         pub fn new(alloc: &'l mut Allocator) -> Self {
-            Self { alloc, label_map: HashMap::new() } 
+            Self { alloc, label_map: HashMap::new(), break_map: HashMap::new() } 
         }
-        pub fn use_label(&mut self, label: Symbol, body: Id) {
+        pub fn use_label(&mut self, label: Symbol, body: Id, next: Id) {
             self.label_map.insert(label, body).map(|s| panic!("Overwriting label: {:?}", label));
+            self.break_map.insert(label, next).map(|s| panic!("Overwriting label: {:?}", label));
         }
-        pub fn id_from_label(&self, label: Symbol) -> Id{
+        pub fn continue_id_from_label(&self, label: Symbol) -> Id{
             *self.label_map.get(&label).expect(&format!(
+                "Label {:?} does not exist in map", label)
+            )
+        }
+        pub fn break_id_from_label(&self, label: Symbol) -> Id{
+            *self.break_map.get(&label).expect(&format!(
                 "Label {:?} does not exist in map", label)
             )
         }
@@ -123,8 +130,8 @@ mod build {
             let next = iter.clone();
             match stmt {
                 Tree::Block(BlockStatement { label, bbody }) => {
-                    state.use_label(label, nid);
                     let (nhead, ntails) = build_graph(next, state);
+                    state.use_label(label, nid, nhead);
                     let (bhead, btails) = build_graph(bbody.into_iter(), state);
                     state.connect(&btails, nhead);
                     content.push_back(Tree::Block(BlockStatement {
@@ -134,8 +141,8 @@ mod build {
                     return (nid, ntails);
                 },
                 Tree::Switch(SwitchStatement { arg, label, cases, default }) => {
-                    state.use_label(label, nid);
                     let (nhead, ntails) = build_graph(next, state);
+                    state.use_label(label, nid, nhead);
                     let mut ncases = Vec::new();
                     let mut children = Vec::new();
                     let mut prev: Option<Box<[Id]>> = None;
@@ -158,8 +165,8 @@ mod build {
                     return (nid, ntails);
                 },
                 Tree::Loop(LoopStatement { cond, label, lbody, dowhile }) => {
-                    state.use_label(label, nid);
                     let (nhead, ntails) = build_graph(next, state);
+                    state.use_label(label, nid, nhead);
                     let (lhead, ltails) = build_graph(lbody.into_iter(), state);
                     state.connect(&ltails, nhead);
                     content.push_back(Tree::Loop(LoopStatement {
@@ -171,8 +178,8 @@ mod build {
                     return (nid, ntails);
                 },
                 Tree::If(IfStatement { cond, label, btrue, bfalse }) => {
-                    state.use_label(label, nid);
                     let (nhead, ntails) = build_graph(next, state);
+                    state.use_label(label, nid, nhead);
                     let (thead, ttails) = build_graph(btrue.into_iter(), state);
                     let (fhead, ftails) = build_graph(bfalse.into_iter(), state);
                     state.connect(&ttails, nhead);
@@ -192,13 +199,13 @@ mod build {
                 },
                 Tree::Continue(label) => {
                     content.push_back(Tree::Continue(label));
-                    state.alloc.set(nid, content, vec![state.id_from_label(label)]);
+                    state.alloc.set(nid, content, vec![state.continue_id_from_label(label)]);
                     return (nid, tails.into_boxed_slice())
                 },
                 Tree::Break(label) => {
                     content.push_back(Tree::Break(label));
-                    state.alloc.set(nid, content, vec![]);
-                    return (nid, vec![nid].into_boxed_slice());
+                    state.alloc.set(nid, content, vec![state.break_id_from_label(label)]);
+                    return (nid, tails.into_boxed_slice());
                 },
                 other => content.push_back(other)
             }
