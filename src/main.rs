@@ -11,6 +11,7 @@ mod typeinfer;
 mod optimizer;
 mod substitution;
 mod parameters;
+mod ssa;
 use typeinfer::typeinfer;
 use hoist::hoist;
 use converter::convert;

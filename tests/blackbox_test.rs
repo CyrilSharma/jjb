@@ -160,7 +160,6 @@ fn test(name: &str, source: &str, compile: &str) {
     ast = optimize(ast.as_ref(), &mut sm);
     typeinfer(ast.as_mut(), &mut sm);
     test_equal(source, compile, &ast, &sm, name, &params);
-    // The other phases will come here...
 }
 
 // You can make this better by having test dynamically insert the headers, where the headers
@@ -483,6 +482,20 @@ method_test!(switch_2, r#"
             case 0: cnt++;
             case 1: break;
             case 2: cnt |= 1;
+            case 3: continue;
+            case 4: cnt *= cnt;
+        }
+    }
+    System.out.println(cnt);
+"#);
+
+method_test!(switch_3, r#"
+    int cnt = 0;
+    while (cnt++ < 50) {
+        switch (cnt % 5) {
+            case 0: do { cnt++; } while (cnt < 10);
+            case 1: break;
+            case 2: do { cnt++; } while (cnt < 1);;
             case 3: continue;
             case 4: cnt *= cnt;
         }

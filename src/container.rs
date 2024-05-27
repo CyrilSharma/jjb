@@ -1,6 +1,6 @@
 use std::{collections::LinkedList, ops::Add};
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Container<T> {
     container: LinkedList<T>
 }
