@@ -5,24 +5,30 @@ use crate::symbolmanager::{Symbol, SymbolManager};
 use std::io::{self, Write};
 
 #[allow(dead_code)]
-pub fn print(tree: &Tree, sm: &SymbolManager, params: &Parameters) {
+pub fn print(tree: &Tree, sm: &SymbolManager) {
     let stdout = io::stdout();
     let handle = stdout.lock();
-    let mut state = PrintState { level: 0, sm, buf: handle, params };
+    let mut state = PrintState { level: 0, sm, buf: handle };
     print_tree(tree, &mut state);
 }
 
 #[allow(dead_code)]
-pub fn str_print(tree: &Tree, sm: &SymbolManager, buf: &mut Vec<u8>, params: &Parameters) {
-    let mut state = PrintState { level: 0, sm, buf, params };
+pub fn str_print(tree: &Tree, sm: &SymbolManager) -> String {
+    let mut buf = Vec::new();
+    buf_print(tree, sm, &mut buf);
+    String::from_utf8_lossy(&buf).to_string()
+}
+
+#[allow(dead_code)]
+pub fn buf_print(tree: &Tree, sm: &SymbolManager, buf: &mut Vec<u8>) {
+    let mut state = PrintState { level: 0, sm, buf };
     print_tree(tree, &mut state);
 }
 
 struct PrintState<'l, W: Write> {
     level: u32,
     sm: &'l SymbolManager,
-    buf: W,
-    params: &'l Parameters
+    buf: W
 }
 
 impl<'l, W: Write> PrintState<'l, W> {
@@ -88,7 +94,7 @@ fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
         },
         Tree::LetC(ClassDeclaration { name, members, methods, extends }) => {
             let mut header = "".to_string();
-            if state.params.entry_class == state.sm.name(*name) { header.push_str("public ") }
+            // if state.params.entry_class == state.sm.name(*name) { header.push_str("public ") }
             header.push_str(&format!("class {}", state.uname(*name)));
             if let Some(e) = extends {
                 header.push_str(&format!(" extends {}", &state.uname(*e)));

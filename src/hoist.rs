@@ -5,12 +5,12 @@ use crate::symbolmanager::{Symbol, SymbolManager};
 
 struct State<'l> {
     sm: &'l mut SymbolManager,
-    cont_header: HashMap<Symbol, TreeContainer>
+    cont_to_break: HashMap<Symbol, Symbol>
 }
 
 impl<'l> State<'l> {
     fn new(sm: &'l mut SymbolManager) -> Self {
-        State { sm, cont_header: HashMap::new() }
+        State { sm, cont_to_break: HashMap::new() }
     }
 }
 
@@ -35,7 +35,7 @@ fn statement(root: &Tree, state: &mut State) -> TreeContainer {
             for s in stmts { res.append(statement(s, state)) }
             res
         },
-        Tree::LetI(import) => TreeContainer::make(root.clone()),
+        Tree::LetI(_) => TreeContainer::make(root.clone()),
         Tree::LetF(fundecl) => {
             let mut body = TreeContainer::new();
             for s in &fundecl.body { body.append(statement(&s, state)) };
@@ -83,36 +83,34 @@ fn statement(root: &Tree, state: &mut State) -> TreeContainer {
         },
         Tree::Loop(lstmt) => {
             let mut res = TreeContainer::new();
-            let (head, cond) = operand(&lstmt.cond, state);
+            let (mut head, cond) = operand(&lstmt.cond, state);
+            let iflabel = state.sm.fresh("while_cond");
+            head.push_back(Tree::If(IfStatement {
+                cond: cond.clone(),
+                label: iflabel,
+                btrue: TreeContainer::make(Tree::Break(iflabel)),
+                bfalse: TreeContainer::make(Tree::Break(lstmt.label)),
+            }));
             let mut lbody = TreeContainer::new();
-            let end: TreeContainer = head.clone().into_iter().map(|s| match s {
-                Tree::LetP(pdecl) => Tree::LetP(PrimStatement {
-                    typ: Typ::Void, exp: Some(Operand::T(ExprTree {
-                        op: Operation::Set,
-                        args: vec![
-                            Operand::V(pdecl.name),
-                            pdecl.exp.expect("Pdecl exp is null.")
-                        ]
-                    })),
-                    name: state.sm.fresh("void")
-                }),
-                _ => panic!("Invalid Tree returned from Operand")
-            }).collect();
-            state.cont_header.insert(lstmt.label, end)
-                .map(|_| panic!("label: {} already in map!", state.sm.uname(lstmt.label)));
-            for s in &lstmt.lbody { lbody.append(statement(&s, state)) };
             if lstmt.dowhile {
-                match cond { // The easiest method is to insert a declaration.
-                    Operand::T(_) => panic!("Operand should not be a tree."),
-                    Operand::V(name) => Some(Tree::LetP(PrimStatement {
-                        name, exp: None, typ: Typ::Bool
-                    })),
-                    _ => None
-                }.map(|d| res.push_back(d));
+                let label = state.sm.fresh("do_block");
+                state.cont_to_break.insert(lstmt.label, label);
+                let mut bbody = TreeContainer::new();
+                lstmt.lbody.iter().for_each(|s| bbody.append(statement(&s, state)));
+                bbody = tail(bbody, Tree::Break(label));
+                lbody = TreeContainer::make(Tree::Block(BlockStatement { label, bbody }));
+                lbody.append(head);
             } else {
-                res.append(head);
+                lstmt.lbody.iter().for_each(|s| lbody.append(statement(&s, state)));
+                lbody = head + lbody;
             }
-            res.push_back(Tree::Loop(LoopStatement { cond, lbody, ..lstmt.clone() }));
+            lbody = tail(lbody, Tree::Continue(lstmt.label));
+            res.push_back(Tree::Loop(LoopStatement {
+                cond: Operand::C(Literal::Bool(true)),
+                lbody,
+                label: lstmt.label,
+                dowhile: lstmt.dowhile
+            }));
             res
         },
         Tree::If(IfStatement { cond, label, btrue, bfalse }) => {
@@ -139,11 +137,10 @@ fn statement(root: &Tree, state: &mut State) -> TreeContainer {
             }
             TreeContainer::make(root.clone())
         },
-        Tree::Continue(label) => {
-            let mut res = state.cont_header.get(&label).expect("Label is not in table!").clone();
-            res.push_back(Tree::Continue(*label));
-            res
-        }
+        Tree::Continue(label) => TreeContainer::make(match state.cont_to_break.get(&label) {
+            Some(sym) => Tree::Break(*sym),
+            None => Tree::Continue(*label) 
+        }),
         Tree::Break(label) => TreeContainer::make(Tree::Break(*label)),
         Tree::EntryPoint(sym) => TreeContainer::make(Tree::EntryPoint(*sym)),
         _ => todo!()
@@ -278,4 +275,16 @@ fn assignee(root: &Operand, state: &mut State) -> (TreeContainer, Operand) {
         },
         other => panic!("Invalid Assignee Operand: {:?}", other)
     }
+}
+
+fn tail(mut container: TreeContainer, el: Tree) -> TreeContainer {
+    use Tree::*;
+    if let Some(t) = container.back() {
+        match t {
+            Return(_) | Break(_) | Continue(_) => return container,
+            _ => ()
+        }
+    }
+    container.push_back(el);
+    container
 }

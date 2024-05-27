@@ -115,7 +115,7 @@ fn test(source: &str, checker: impl Fn(CheckState, &SymbolManager)) {
     let params = Parameters { entry_name: "main".to_string(), entry_class: "Test".to_string() };
     let ast = convert(tree.root_node(), source.as_bytes(), &params, &mut sm);
     let state: CheckState = census(&ast);
-    print(&ast, &sm, &params);
+    print(&ast, &sm);
     checker(state, &sm);
 }
 

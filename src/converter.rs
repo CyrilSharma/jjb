@@ -41,6 +41,8 @@ impl<'l> State<'l> {
         }
     }
 
+    
+
     pub fn push_continue_label(&mut self, label: Symbol) -> Option<Symbol> {
         let res = self.continue_label;
         self.continue_label = Some(label);
@@ -509,10 +511,14 @@ fn if_statement(node: Node, state: &mut State) -> TreeContainer {
         Tree::Break(branch_label)
     );
     let mut bfalse = TreeContainer::new();
-    node.child_by_field_name("alternative").map(|alt| bfalse = tail(
-        inline_statement(alt, state),
-        Tree::Break(branch_label)
-    ));
+    if let Some(alt) = node.child_by_field_name("alternative") {
+        bfalse = tail(
+            inline_statement(alt, state),
+            Tree::Break(branch_label)
+        )
+    } else {
+        bfalse = TreeContainer::make(Tree::Break(branch_label))
+    }
     TreeContainer::make(Tree::If(IfStatement {
         cond: expression(state.tsret.get_field(&node, "condition"), state),
         btrue,
@@ -526,10 +532,7 @@ fn while_statement(node: Node, state: &mut State, dowhile: bool) -> TreeContaine
     let bstash = state.push_break_label(loop_label);
     let cstash = state.push_continue_label(loop_label);
     let body_node = state.tsret.get_field(&node, "body");
-    let inline_body = tail(
-        inline_statement(body_node, state),
-        Tree::Continue(loop_label)
-    );
+    let inline_body = inline_statement(body_node, state);
     state.restore_break_label(bstash);
     state.restore_continue_label(cstash);
     TreeContainer::make(Tree::Loop(LoopStatement {
@@ -741,7 +744,6 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
             let isym = state.var_scope.find(iname).or_else(||
                 state.class_scope.find(iname)
             );
-            println!("iname({}): isym({:?})", iname, isym);
             if let Some(sym) = isym {
                 (O::V(sym), state.type_map.get(&sym).cloned())   
             } else {

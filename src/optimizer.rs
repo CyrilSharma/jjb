@@ -106,9 +106,6 @@ pub mod shrink {
 
     pub fn shrink(root: Tree, sm: &mut SymbolManager) -> Box<Tree> {
         let counts = census::census(&root);
-        for (sym, count) in &counts {
-            println!("{}: {}", sm.uname(*sym), *count);
-        }
         let mut state = State::new(counts, sm);
         initialize_state(&root, &mut state);
         Box::new(Tree::Program(traverse(root, &mut state)))
@@ -161,10 +158,7 @@ pub mod shrink {
         match root {
             Tree::Program(stmts) => traverselist(stmts, state),
             Tree::LetI(_) => TreeContainer::make(root),
-            Tree::LetF(f) if state.dead(f.name) => {
-                println!("Uh oh: {} is dead", state.sm.uname(f.name));
-                TreeContainer::new()
-            }, 
+            Tree::LetF(f) if state.dead(f.name) => TreeContainer::new(),
             Tree::LetF(f) => TreeContainer::make(Tree::LetF(FunDeclaration {
                 body: traverselist(f.body, state), ..f
             })),
@@ -273,7 +267,6 @@ pub mod shrink {
             // We wrap functions in a block and break from the block.
             // This is necessary to handle arbitrary control flow.
             Tree::Return(ReturnStatement { val: Some(e) }) if state.inline.is_some() => {
-                println!("I ({:?}) executed!", e);
                 let inline = state.inline.as_ref().unwrap();
                 let mut res = TreeContainer::new();
                 res.push_back(Tree::LetP(PrimStatement {

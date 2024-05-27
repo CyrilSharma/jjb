@@ -1,12 +1,45 @@
 use std::collections::HashMap;
-use crate::{container::ContainerIntoIter, ir::*, symbolmanager::Symbol};
+use crate::symbolmanager::SymbolManager;
+use crate::parameters::Parameters;
+use crate::printer::str_print;
+use crate::container::ContainerIntoIter;
+use crate::ir::*;
+use crate::symbolmanager::Symbol;
 
 type Id = usize;
-struct CfgNode {
+#[derive(Clone)]
+pub struct CfgNode {
     id: Id,
     content: TreeContainer,
     children: Vec<Id>,
     parent: Id
+}
+
+#[allow(unused)]
+pub fn print_graph(nodes: &[CfgNode], sm: &SymbolManager) {
+    println!("digraph G {{");
+    println!(r#"  node [shape=box, fontname="Helvetica", fontsize=12]"#);
+    for node in nodes {
+        let res = node.content.iter().map(|n| format!(
+            "      <tr><td>{}</td></tr>",
+            str_print(n, sm).trim()
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("'", "&#39;")
+        )).collect::<Vec<_>>().join("\n");
+        println!(
+r#"  {} [label=<
+    <table border="0" cellborder="0" cellspacing="0">
+      <tr><td> Node {} </td></tr>   
+{}
+    </table>
+  >]"#, node.id, node.id, res);
+        for &child in &node.children {
+            println!("  {} -> {}\n", node.id, child)
+        }
+    }
+    println!("}}");
 }
 
 impl Default for CfgNode {
@@ -20,7 +53,7 @@ impl Default for CfgNode {
     }
 }
 
-struct Allocator {
+pub struct Allocator {
     nodes: Vec<CfgNode>
 }
 
@@ -55,6 +88,9 @@ mod build {
     }
     
     impl<'l> State<'l> {
+        pub fn new(alloc: &'l mut Allocator) -> Self {
+            Self { alloc, label_map: HashMap::new() } 
+        }
         pub fn use_label(&mut self, label: Symbol, body: Id) {
             self.label_map.insert(label, body).map(|s| panic!("Overwriting label: {:?}", label));
         }
@@ -71,11 +107,17 @@ mod build {
             for &child in ids.as_ref() { self.alloc.add_child(child, target) }
         }
     }
+
+    pub fn build(tree: TreeContainer, alloc: &mut Allocator) -> Vec<CfgNode> {
+        let mut state = State::new(alloc);
+        build_graph(tree.into_iter(), &mut state);
+        alloc.nodes.clone()
+    }
     
     fn build_graph(mut iter: ContainerIntoIter<Tree>, state: &mut State) -> (Id, Box<[Id]>) {
-        let mut nid = state.alloc.alloc();
+        let nid = state.alloc.alloc();
         let mut content = TreeContainer::new();
-        let mut tails = Vec::new();
+        let tails = Vec::new();
         let mut cur = iter.next();
         while let Some(stmt) = cur {
             let next = iter.clone();
@@ -88,7 +130,7 @@ mod build {
                     content.push_back(Tree::Block(BlockStatement {
                         label, bbody: TreeContainer::new()
                     }));
-                    state.alloc.set(nid, content, vec![nhead]);
+                    state.alloc.set(nid, content, vec![bhead]);
                     return (nid, ntails);
                 },
                 Tree::Switch(SwitchStatement { arg, label, cases, default }) => {
@@ -103,7 +145,12 @@ mod build {
                         ncases.push((ops, TreeContainer::new()));
                     }
                     let (dhead, dtails) = build_graph(default.into_iter(), state);
-                    for &child in dtails.as_ref() { state.alloc.add_child(child, nhead) }
+                    state.connect(&dtails, nhead);
+                    children.push(dhead);
+                    content.push_back(Tree::Switch(SwitchStatement {
+                        arg, label, cases: ncases,
+                        default: TreeContainer::new(),
+                    }));
                     state.alloc.set(nid, content, children);
                     return (nid, ntails);
                 },
@@ -133,6 +180,7 @@ mod build {
                         bfalse: TreeContainer::new(),
                     }));
                     state.alloc.set(nid, content, vec![thead, fhead]);
+                    println!("nhead: {}", nhead);
                     return (nid, ntails);
                 },
                 Tree::Return(r) => {
@@ -156,5 +204,72 @@ mod build {
         }
         state.alloc.set(nid, content, vec![]);
         return (nid, vec![nid].into_boxed_slice());
+    }
+}
+
+
+#[cfg(test)]
+mod test {
+    use tree_sitter::Parser;
+    use crate::ir::*;
+    use crate::converter::convert;
+    use crate::hoist::hoist;
+    use crate::optimizer::optimize;
+    use crate::parameters::Parameters;
+    use crate::symbolmanager::SymbolManager;
+    use crate::typeinfer::typeinfer;
+
+    use super::{print_graph, Allocator};
+
+    #[test]
+    pub fn f() {
+        let text = r#"
+        public class Test {
+            public static void main(String[] args) {
+                int i = 0, j = 0, k = 0;
+                label1: while (i++ < 10) {
+                    label2: while (j++ < 10) {
+                        label3: while (k++ < 10) {
+                            System.out.printf("%d %d %d\n", i, j, k);
+                            if ((i ^ j) < (i ^ k)) {
+                                continue label2;
+                            }
+                            if (i < 4) { continue label1; }
+                            break label3;
+                        }
+                        if (j > 3) { continue label2; }
+                        break label1;
+                    }
+                }
+            }
+        }
+        "#;
+
+        let mut parser = Parser::new();
+        parser.set_language(&tree_sitter_java::language()).expect("Error loading Java grammar");
+        let tree = parser.parse(text, None).unwrap();
+        let mut sm = SymbolManager::new();
+        let class_name = "Test".to_string();
+        let params = Parameters { entry_class: class_name, entry_name: "main".to_string() };
+        let mut ast = convert(tree.root_node(), text.as_bytes(), &params, &mut sm);
+        ast = hoist(ast.as_ref(), &mut sm);
+        ast = optimize(ast.as_ref(), &mut sm);
+        typeinfer(ast.as_mut(), &mut sm);
+        match ast.as_ref() {
+            Tree::Program(p) => match p.iter().next().expect("") {
+                Tree::LetC(c) => match c.methods.back().expect("") {
+                    Tree::LetF(f) => {
+                        let mut alloc = Allocator::new();
+                        let graph = super::build::build(f.body.clone(), &mut alloc);
+                        print_graph(&graph, &sm);
+                    },
+                    other => panic!("Missing Function"),
+                },
+                other => panic!("Missing Class"),
+            },
+            other => panic!("Missing Program")
+        }
+        assert!(true)
+        
     }
 }

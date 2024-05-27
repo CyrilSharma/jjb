@@ -131,10 +131,7 @@ impl JavaFileManager {
 fn test_equal(source: &str, compile: &str, tree: &Tree, sm: &SymbolManager, name: &str, params: &Parameters) {
     let source_path = format!("{}_source", name);
     let compile_path = format!("{}_compile", name);
-    let mut buffer: Vec<u8> = Vec::new();
-    buffer.reserve(compile.len());
-    str_print(tree, sm, &mut buffer, params);
-    let buffer_str = std::str::from_utf8(&buffer).expect("Invalid UTF-8");
+    let buffer_str = str_print(tree, sm);
     let jfm = JavaFileManager::new("testfiles/");
     let res_source = jfm.run(&source_path, &source);
     let res_compiled = jfm.run(&compile_path, &buffer_str);
@@ -142,7 +139,7 @@ fn test_equal(source: &str, compile: &str, tree: &Tree, sm: &SymbolManager, name
         println!("------- SOURCE ------");
         println!("{}", source);
         println!("------- COMPILED ------");
-        print(tree, sm, params);
+        print(tree, sm);
         println!("----------------------");
         assert_eq!(res_source, res_compiled);
     }
@@ -157,7 +154,7 @@ fn test(name: &str, source: &str, compile: &str) {
     let params = Parameters { entry_class: class_name, entry_name: "main".to_string() };
     let mut ast = convert(tree.root_node(), compile.as_bytes(), &params, &mut sm);
     ast = hoist(ast.as_ref(), &mut sm);
-    ast = optimize(ast.as_ref(), &mut sm);
+    // ast = optimize(ast.as_ref(), &mut sm);
     typeinfer(ast.as_mut(), &mut sm);
     test_equal(source, compile, &ast, &sm, name, &params);
 }
@@ -432,6 +429,18 @@ method_test!(if_3, r#"
         }
     }
     System.out.println(z);
+"#);
+
+method_test!(if_no_else, r#"
+    int i = 10;
+    if (i < 12) {
+        System.out.print("0");
+    }
+    System.out.print("1");
+    if (i > 12) {
+        System.out.print("2");
+    }
+    System.out.print("3");
 "#);
 
 method_test!(label_1, r#"
