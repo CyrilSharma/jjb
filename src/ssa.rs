@@ -1,19 +1,9 @@
 use std::collections::HashMap;
 use crate::symbolmanager::SymbolManager;
-use crate::parameters::Parameters;
 use crate::printer::str_print;
 use crate::container::ContainerIntoIter;
 use crate::ir::*;
 use crate::symbolmanager::Symbol;
-
-type Id = usize;
-#[derive(Clone)]
-pub struct CfgNode {
-    id: Id,
-    content: TreeContainer,
-    children: Vec<Id>,
-    parent: Id
-}
 
 #[allow(unused)]
 pub fn print_graph(nodes: &[CfgNode], sm: &SymbolManager) {
@@ -42,13 +32,22 @@ r#"  {} [label=<
     println!("}}");
 }
 
+type Id = usize;
+#[derive(Clone)]
+pub struct CfgNode {
+    id: Id,
+    content: TreeContainer,
+    children: Vec<Id>,
+    preds: Vec<Id>
+}
+
 impl Default for CfgNode {
     fn default() -> Self {
         Self {
             id: Default::default(),
             content: TreeContainer::new(),
             children: Default::default(),
-            parent: Default::default()
+            preds: Default::default()
         }
     }
 }
@@ -66,21 +65,234 @@ impl Allocator {
         self.nodes.push(CfgNode::default());
         res
     }
+    pub fn len(&self) -> usize { self.nodes.len() }
     pub fn set(&mut self, id: Id, content: TreeContainer, children: Vec<Id>) {
-        self.nodes[id] = CfgNode { parent: 0, id, content, children };
+        self.nodes[id] = CfgNode { preds: Vec::new(), id, content, children };
     }
-    pub fn grab(&mut self, id: Id) -> &mut CfgNode {
+    pub fn grab(&self, id: Id) -> &CfgNode {
+        &self.nodes[id]
+    }
+    pub fn grab_mut(&mut self, id: Id) -> &mut CfgNode {
         &mut self.nodes[id]
     }
     pub fn add_child(&mut self, parent: Id, child: Id) {
-        let p = self.grab(parent);
+        let p = self.grab_mut(parent);
         p.children.push(child);
-        let c = self.grab(child);
-        c.parent = parent;
+        let c = self.grab_mut(child);
+        c.preds.push(parent);
     }
 }
 
-mod build {
+mod transform {
+    use fixedbitset::FixedBitSet;
+    use crate::ir::{ExprTree, Operand};
+    use std::collections::HashSet;
+
+    use super::*;
+    struct State<'l> {
+        stack: HashMap<Symbol, Vec<Symbol>>,
+        idom: Vec<Id>,
+        sm: &'l mut SymbolManager,
+    }
+
+    impl<'l> State<'l> {
+        fn add_name(&self, sym: Symbol, nname: Symbol) {
+            let entry = self.stack.entry(sym).or_insert(Vec::new());
+            entry.push(nname);
+        }
+    }
+
+    pub fn transform(tree: TreeContainer, sm: &mut SymbolManager) {
+        let mut allocator = Allocator::new();
+        super::graph::build(tree, &mut allocator);
+        transform_graph(&mut allocator, sm);
+    }
+
+    // https://www.cs.cornell.edu/courses/cs6120/2020fa/lesson/5/
+    pub fn transform_graph(alloc: &mut Allocator, sm: &mut SymbolManager) {
+        let (idom, dominance_frontier) = dominance(alloc);
+        let mut vars = HashMap::new();
+        stat(0, alloc, &mut vars);
+        for (v, mut block_set) in vars {
+            let mut blocks: Vec<Id> = block_set.clone().into_iter().collect();
+            while let Some(vassigned) = blocks.pop() {
+                for block in dominance_frontier[vassigned].ones() {
+                    insert_phi(v, block, alloc);
+                    if !block_set.contains(&block) {
+                        block_set.insert(block);
+                        blocks.push(block);
+                    }
+                }
+            }
+        }
+        
+        let mut state = State {
+            idom,
+            stack: HashMap::new(),
+            sm,
+        };
+        
+    }
+
+    pub fn insert_phi(v: Symbol, block: Id, alloc: &Allocator) {
+        fn phi(v: Symbol) -> Tree {
+            Tree::LetP(PrimStatement {
+                name: v,
+                typ: Typ::Void,
+                exp: Some(Operand::T(ExprTree {
+                    op: Operation::Phi,
+                    args: vec![Operand::V(v)],
+                })),
+            })
+        }
+        
+        fn mutate_head(head: &mut Tree, v: Symbol) -> bool {
+            if let Tree::LetP(PrimStatement {
+                exp: Some(Operand::T(ExprTree { op: Operation::Phi, args })),
+                name: sym,
+                ..
+            }) = head {
+                if *sym != v { return false; }
+                args.push(Operand::V(v));
+                return true;
+            }
+            return false;
+        }
+
+        let node = alloc.grab_mut(block);
+        if let Some(head) = node.content.iter_mut().next() {
+            let had_phi = mutate_head(head, v);
+            if had_phi { return }
+        }
+        node.content.push_front(phi(v));
+    }
+
+    pub fn rename(id: Id, state: &mut State, alloc: &mut Allocator) {
+        let content = alloc.grab_mut(id).content.iter_mut();
+        for tree in content {
+            match tree {
+                Tree::LetP(p) => {
+                    match p.exp {
+                        Some(op) => todo!(),
+                        _ => ()
+                    }
+                    let nname = state.sm.refresh(&p.name);
+                    state.add_name(p.name, nname);
+                    p.name = nname;
+                },
+                Tree::Switch(s) => todo!(),
+                Tree::If(i) => todo!(),
+                Tree::Return(r) => match r.val {
+                    Some(op) => todo!(),
+                    _ => ()
+                },
+                Tree::Loop(_) => todo!(),
+                Tree::LetI(_) | Tree::Break(_) |
+                Tree::Continue(_) | Tree::EntryPoint(_) => (),
+                Tree::Try(_) => todo!(),
+                _ => panic!("Invalid Tree Type in SSA")
+            }
+        }
+
+        let children = alloc.grab(id).children.clone();
+        for child in children {
+            if state.idom[child] != id { continue }
+            rename(child, state, alloc);
+        }
+
+        // Some stack popping.
+        todo!()
+    }
+
+    pub fn stat(id: Id, alloc: &Allocator, mp: &mut HashMap<Symbol, HashSet<Id>>) {
+        let content = &alloc.grab(id).content;
+        for tree in content {
+            match tree {
+                Tree::LetP(p) => {
+                    let id_set = mp.entry(p.name).or_insert(HashSet::new());
+                    id_set.insert(id);
+                },
+                Tree::Switch(_) | Tree::Loop(_) |
+                Tree::If(_) | Tree::Return(_) |
+                Tree::LetI(_) | Tree::Break(_) |
+                Tree::Continue(_) | Tree::EntryPoint(_) => (),
+                Tree::Try(_) => todo!(),
+                _ => panic!("Invalid Tree Type in SSA")
+            }
+        }
+        for &child in &alloc.grab(id).children {
+            stat(child, alloc, mp);
+        }
+    }
+
+    pub fn dominance(alloc: &Allocator) -> (Vec<Id>, Vec<FixedBitSet>) {
+        fn dfs(node: Id, v: &mut Vec<Id>, alloc: &Allocator) {
+            let cfg = alloc.grab(node);
+            for &child in &cfg.children { dfs(child, v, alloc) }
+            v.push(node);
+        }
+
+        // https://web.archive.org/web/20210422111834/https://www.cs.rice.edu/~keith/EMBED/dom.pdf
+        fn intersect(a: Id, b: Id, doms: &Vec<usize>) -> Id {
+            let mut fingera = a;
+            let mut fingerb = b;
+            while fingera != fingerb {
+                while fingera < fingerb {
+                    fingera = doms[fingera];
+                }
+                while fingerb < fingera {
+                    fingerb = doms[fingerb];
+                }
+            }
+            return fingera;
+        }
+
+        // N^2 but with incredible constant factor.
+        let undefined: usize = alloc.len(); 
+        let (mut postorder, mut index) = (Vec::new(), Vec::new());
+        postorder.reserve(alloc.len());
+        index.reserve(alloc.len());
+        dfs(0, &mut postorder, alloc);
+        for (i, p) in postorder.iter().enumerate() {
+            index[*p] = i;
+        }
+        let mut doms = vec![undefined; alloc.len()];
+        doms[0] = 0;
+        loop {
+            let mut changed = false;
+            for &node in postorder.iter().rev().skip(1) {
+                let preds = &alloc.grab(node).preds;
+                let mut new_idom = undefined;
+                for &p in preds {
+                    if doms[p] == undefined { continue }
+                    if new_idom == undefined { new_idom = index[p]; continue }
+                    new_idom = intersect(index[p], index[new_idom], &doms);
+                }
+                if doms[node] != new_idom {
+                    doms[node] = new_idom;
+                    changed = true;
+                }
+            }
+            if !changed { break }
+        }
+
+        let mut df: Vec<FixedBitSet> = Vec::new();
+        for b in 0..alloc.len() {
+            if alloc.grab(b).children.len() < 2 { continue; } 
+            for &p in &alloc.grab(b).preds {
+                let mut runner = p;
+                while runner != doms[b] {
+                    df[runner].set(b, true);
+                    runner = doms[runner];
+                }
+            }
+        }
+        (doms, df)
+    }
+    
+}
+
+mod graph {
     use super::*;
     struct State<'l> {
         alloc: &'l mut Allocator,
@@ -264,7 +476,7 @@ mod test {
                 Tree::LetC(c) => match c.methods.back().expect("") {
                     Tree::LetF(f) => {
                         let mut alloc = Allocator::new();
-                        let graph = super::build::build(f.body.clone(), &mut alloc);
+                        let graph = super::graph::build(f.body.clone(), &mut alloc);
                         print_graph(&graph, &sm);
                     },
                     other => panic!("Missing Function"),

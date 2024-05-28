@@ -5,6 +5,8 @@ pub struct Container<T> {
     container: LinkedList<T>
 }
 
+// This was supposed to be done so I could swap out the underlying container,
+// But it might've been easier to just implement Operations on a type.
 impl<T> Container<T> {
     pub fn new() -> Self {
         Self { container: LinkedList::new() }
@@ -22,6 +24,10 @@ impl<T> Container<T> {
 
     pub fn push_back(&mut self, v: T) {
         self.container.push_back(v);
+    }
+
+    pub fn push_front(&mut self, v: T) {
+        self.container.push_front(v);
     }
 
     pub fn append(&mut self, mut v: Self) {
