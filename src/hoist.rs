@@ -17,7 +17,7 @@ impl<'l> State<'l> {
 fn wrap_prim(mut list: TreeContainer, exp: Operand, state: &mut State) -> (TreeContainer, Operand) {
     let name = state.sm.fresh("prim");
     let tree = Tree::LetP(PrimStatement {
-        name, typ: Typ::Unknown, exp: Some(exp)
+        name: Some(name), typ: Typ::Unknown, exp: Some(exp)
     });
     list.push_back(tree);
     (list, Operand::V(name))
@@ -209,10 +209,52 @@ fn operand(root: &Operand, state: &mut State) -> (TreeContainer, Operand) {
             AndSet | OrSet | XorSet | ShrSet | UshrSet | ShlSet if args.len() == 2 => {
                 let (lhsv, l) = assignee(&args[0], state);
                 let (rhsv, r) = operand(&args[1], state);
-                let op = Operand::T(ExprTree { op: *op, args: vec![l, r] });
-                wrap_prim(lhsv + rhsv, op, state)
+                match l {
+                    Operand::V(sym) => {
+                        let exp = if *op == Set {
+                            Some(r)
+                        } else {
+                            let args = vec![Operand::V(sym), r];
+                            Some(Operand::T(ExprTree { op: without_set(*op), args }))
+                        };
+                        let prim = TreeContainer::make(Tree::LetP(
+                            PrimStatement { name: Some(sym), typ: Typ::Void, exp }
+                        ));
+                        (lhsv + rhsv + prim, Operand::V(sym))
+                    },
+                    _ => {
+                        let op = Operand::T(ExprTree { op: *op, args: vec![l, r] });
+                        wrap_prim(lhsv + rhsv, op, state)
+                    }
+                }
             },
-            PreInc | PreDec | Not | LNot | Sub | PostInc | PostDec | Assert if args.len() == 1 => {
+            PreInc | PreDec |  PostInc | PostDec if args.len() == 1 => {
+                let (lhsv, l) = assignee(&args[0], state);
+                match l {
+                    Operand::V(sym) => {
+                        let newop = match *op {
+                            PreDec | PostDec => Sub,
+                            PreInc | PostInc => Add,
+                            _ => panic!()
+                        };
+                        let args = vec![Operand::V(sym), Operand::C(Literal::Byte(1))];
+                        let exp = Some(Operand::T(ExprTree { op: newop, args }));
+                        let prim = TreeContainer::make(Tree::LetP(PrimStatement
+                            { name: Some(sym), typ: Typ::Void, exp }
+                        ));
+                        match op {
+                            PreDec | PreInc => (lhsv + prim, Operand::V(sym)),
+                            PostDec | PostInc => (lhsv + prim, Operand::V(sym)),
+                            _ => panic!()
+                        }
+                    },
+                    _ => {
+                        let op = Operand::T(ExprTree { op: *op, args: vec![l] });
+                        wrap_prim(lhsv, op, state)
+                    }
+                }
+            },
+            Not | LNot | Sub | Assert if args.len() == 1 => {
                 let (v, e) = operand(&args[0], state);
                 let op = Operand::T(ExprTree { op: *op, args: vec![e] });
                 wrap_prim(v, op, state)
@@ -275,6 +317,24 @@ fn assignee(root: &Operand, state: &mut State) -> (TreeContainer, Operand) {
             other => panic!("Invalid Assignee Op: {:?}", other)
         },
         other => panic!("Invalid Assignee Operand: {:?}", other)
+    }
+}
+
+fn without_set(op: Operation) -> Operation {
+    use Operation::*;
+    match op {
+        PSet => Add,
+        SSet => Sub,
+        MSet => Mul,
+        DSet => Div,
+        ModSet => Mod,
+        AndSet => And,
+        OrSet => Or,
+        XorSet => Xor,
+        ShrSet => Shr,
+        UshrSet => UShr,
+        ShlSet => Shl,
+        other => panic!("Invalid operation {:?}", other)
     }
 }
 

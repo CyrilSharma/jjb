@@ -95,7 +95,7 @@ impl fmt::Display for Literal {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Operation {
     // Arithmetic
     Add,
@@ -216,7 +216,7 @@ pub struct ExprTree {
 
 #[derive(Clone)]
 pub struct PrimStatement {
-    pub name: Symbol,
+    pub name: Option<Symbol>,
     pub typ: Typ,
     pub exp: Option<Operand>
 }

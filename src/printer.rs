@@ -52,25 +52,12 @@ fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
             state.println(&format!("import {};", path));
         },
         Tree::LetP(PrimStatement { name, typ, exp }) => {
-            if *typ != Typ::Void {
-                if let Some(e) = exp {
-                    let tp = serialize_tp(typ, state);
-                    let op = serialize_op(e, state);
-                    state.println(&format!("{} {} = {};",
-                        tp, state.uname(*name), op
-                    ));
-                } else {
-                    let tp = serialize_tp(typ, state);
-                    state.println(&format!("{} {};",
-                        tp, state.uname(*name),
-                    ));
-                }
-            } else {
-                if let Some(e) = exp {
-                    let op = serialize_op(e, state);
-                    state.println(&format!("{};", op));
-                }
-            }
+            let mut header = String::new();
+            if *typ != Typ::Void { header.push_str(&format!("{}", serialize_tp(typ, state))) }
+            if let Some(n) = name { header.push_str(&format!(" {}", state.uname(*n))) }
+            if let Some(e) = exp { header.push_str(&format!(" = {}", serialize_op(e, state))) }
+            header.push_str(";");
+            state.println(&header);
         },
         Tree::LetF(FunDeclaration { name, args, modifiers, throws, return_typ, body, constructor }) => {
             let mut header = modifiers.join(" ");
@@ -199,8 +186,8 @@ fn serialize_op(op: &Operand, state: &mut PrintState<'_, impl Write>) -> String 
                 AndSet | OrSet | XorSet | ShrSet |
                 UshrSet | ShlSet | Eq | Neq | G | L |
                 GEq | LEq | LAnd | LOr | LNot | Shl |
-                Shr | UShr | And | Or | Xor | InstanceOf |
-                Phi if args.len() == 2 => format!("({}) {} ({})",
+                Shr | UShr | And | Or | Xor | InstanceOf
+                if args.len() == 2 => format!("({}) {} ({})",
                     serialize_op(&args[0], state),
                     serialize_operator(*op),
                     serialize_op(&args[1], state)
@@ -238,6 +225,12 @@ fn serialize_op(op: &Operand, state: &mut PrintState<'_, impl Write>) -> String 
                     serialize_op(&args[0], state),
                     serialize_op(&args[1], state),
                     args[2..].iter()
+                        .map(|arg| serialize_op(arg, state))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                Phi => format!("Phi({})",
+                    args.iter()
                         .map(|arg| serialize_op(arg, state))
                         .collect::<Vec<_>>()
                         .join(", ")

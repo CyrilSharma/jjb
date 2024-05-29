@@ -268,7 +268,7 @@ fn statement(node: Node, state: &mut State) -> TreeContainer {
         "synchronized_statement" => panic!("Synchronized is unsupported!"),
         "local_variable_declaration" => local_variable_declaration(node, state),
         "throw_statement" => TreeContainer::make(Tree::LetP(PrimStatement { 
-            name: state.sm.fresh("temp"),
+            name: None,
             typ: Typ::Void,
             exp: Some(Operand::T(ExprTree {
                 op: Operation::Throw,
@@ -407,7 +407,7 @@ fn continue_statement(node: Node, state: &mut State) -> TreeContainer {
 
 fn expression_statement(node: Node, state: &mut State) -> TreeContainer {
     TreeContainer::make(Tree::LetP(PrimStatement {
-        name: state.sm.fresh("expr_stmt"),
+        name: Some(state.sm.fresh("expr_stmt")),
         typ: Typ::Void,
         exp: Some(expression(node.child(0).expect("Expression is non-null"), state))
     }))
@@ -546,7 +546,7 @@ fn while_statement(node: Node, state: &mut State, dowhile: bool) -> TreeContaine
 fn for_statement(node: Node, state: &mut State) -> TreeContainer {
     let wrap = |state: &mut State, op: Operand| {
         Tree::LetP(PrimStatement {
-            name: state.sm.fresh("temp"),
+            name: None,
             typ: Typ::Void,
             exp: Some(op)
         })
@@ -595,7 +595,7 @@ fn for_statement(node: Node, state: &mut State) -> TreeContainer {
 
 fn assert_statement(node: Node, state: &mut State) -> TreeContainer {
     TreeContainer::make(Tree::LetP(PrimStatement {
-        name: state.sm.fresh("assert"),
+        name: None,
         typ: Typ::Void,
         exp: Some(Operand::T(ExprTree {
             op: Operation::Assert,
@@ -637,7 +637,7 @@ fn local_variable_declaration(node: Node, state: &mut State) -> TreeContainer {
     let mut res = TreeContainer::new();
     for (name, exp) in syms.into_iter().zip(exps.into_iter()) {
         res.push_back(Tree::LetP(PrimStatement {
-            name, typ: tp.clone(), exp
+            name: Some(name), typ: tp.clone(), exp
         }));
     }
     res

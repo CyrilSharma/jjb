@@ -14,7 +14,7 @@ struct FunDef {
 struct InlineInfo {
     label: Symbol,
     object: Option<Symbol>,
-    name: Symbol
+    name: Option<Symbol>
 }
 
 struct OptimizeState<'l> {
@@ -62,7 +62,7 @@ impl<'l> OptimizeState<'l> {
         self.l_env.insert(sym, cont);
     }
 
-    pub fn with_inline<T>(&mut self, label: Symbol, name: Symbol,
+    pub fn with_inline<T>(&mut self, label: Symbol, name: Option<Symbol>,
         object: Option<Symbol>, f: impl FnOnce(&mut OptimizeState) -> T) -> T {
         let inline = Some(InlineInfo { label, object, name });
         let stash = std::mem::replace(&mut self.inline, inline);
@@ -200,7 +200,7 @@ pub mod shrink {
                     //     }
                     // }
                     // This is kind of horrible. Do this all in one function?
-                    let bbody = state.with_inline(label, *name, obj, |s|
+                    let bbody = state.with_inline(label, todo!(), obj, |s|
                         s.withoutApps(|s|
                             s.withSubst(cargs, nargs, |s|
                                 traverselist(f.body.clone(), s)
@@ -270,9 +270,9 @@ pub mod shrink {
                 let inline = state.inline.as_ref().unwrap();
                 let mut res = TreeContainer::new();
                 res.push_back(Tree::LetP(PrimStatement {
-                    name: state.sm.fresh("t"),
+                    name: inline.name,
                     typ: Typ::Void,
-                    exp: Some(Op::T(ExprTree { op: Set, args: vec![Op::V(inline.name), e] }))
+                    exp: Some(e)
                 }));
                 res.push_back(Tree::Break(inline.label));
                 res
