@@ -51,6 +51,25 @@ fn statement(root: &Tree, state: &mut State) -> TreeContainer {
             }))
         }
         Tree::LetE(_) => todo!(),
+        Tree::LetP(PrimStatement {
+            exp: Some(Operand::T(ExprTree { op, args })),
+            typ: Typ::Void,
+            name: None
+        }) if matches!(op, Operation::InvokeVirtual | Operation::InvokeStatic) => {
+            let (mut lhsv, l) = (TreeContainer::new(), args[0].clone());
+            let mut nargs = vec![l, args[1].clone()];
+            for arg in &args[2..] {
+                let (rhsv, r) = operand(arg, state);
+                lhsv.append(rhsv);
+                nargs.push(r);
+            }
+            lhsv.push_back(Tree::LetP(PrimStatement {
+                exp: Some(Operand::T(ExprTree { op: *op, args: nargs })),
+                typ: Typ::Void,
+                name: None
+            }));
+            lhsv
+        },
         Tree::LetP(primdecl) =>  {
             if primdecl.exp.is_none() { return TreeContainer::make(root.clone()) }
             let e = primdecl.exp.as_ref().expect("");
@@ -223,14 +242,18 @@ fn operand(root: &Operand, state: &mut State) -> (TreeContainer, Operand) {
                         (lhsv + rhsv + prim, Operand::V(sym))
                     },
                     _ => {
-                        let op = Operand::T(ExprTree { op: *op, args: vec![l, r] });
-                        wrap_prim(lhsv + rhsv, op, state)
+                        let op = Operand::T(ExprTree { op: *op, args: vec![l.clone(), r] });
+                        let prim = TreeContainer::make(Tree::LetP(
+                            PrimStatement { name: None, typ: Typ::Void, exp: Some(op) }
+                        ));
+                        (lhsv + rhsv + prim, l)
                     }
                 }
             },
             PreInc | PreDec |  PostInc | PostDec if args.len() == 1 => {
                 let (lhsv, l) = assignee(&args[0], state);
                 match l {
+                    // Requires some thunking.
                     Operand::V(sym) => {
                         let newop = match *op {
                             PreDec | PostDec => Sub,
@@ -239,18 +262,27 @@ fn operand(root: &Operand, state: &mut State) -> (TreeContainer, Operand) {
                         };
                         let args = vec![Operand::V(sym), Operand::C(Literal::Byte(1))];
                         let exp = Some(Operand::T(ExprTree { op: newop, args }));
-                        let prim = TreeContainer::make(Tree::LetP(PrimStatement
+                        let mut prims = TreeContainer::make(Tree::LetP(PrimStatement
                             { name: Some(sym), typ: Typ::Void, exp }
                         ));
+                        // if true {
+                        //     state.
+                        //     prims.push_back(Tree::LetP(PrimStatement
+                        //         { name: Some(sym), typ: Typ::Void, exp }
+                        //     ));
+                        // }
                         match op {
-                            PreDec | PreInc => (lhsv + prim, Operand::V(sym)),
-                            PostDec | PostInc => (lhsv + prim, Operand::V(sym)),
+                            PreDec | PreInc => (lhsv + prims, Operand::V(sym)),
+                            PostDec | PostInc => (lhsv + prims, Operand::V(sym)),
                             _ => panic!()
                         }
                     },
                     _ => {
-                        let op = Operand::T(ExprTree { op: *op, args: vec![l] });
-                        wrap_prim(lhsv, op, state)
+                        let op = Operand::T(ExprTree { op: *op, args: vec![l.clone()] });
+                        let prim = TreeContainer::make(Tree::LetP(
+                            PrimStatement { name: None, typ: Typ::Void, exp: Some(op) }
+                        ));
+                        (lhsv + prim, l)
                     }
                 }
             },

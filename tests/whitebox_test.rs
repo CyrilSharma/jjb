@@ -51,7 +51,7 @@ fn traverse(root: &Tree, state: &mut CheckState) {
         }
         Tree::LetE(_) => todo!(),
         Tree::LetP(PrimStatement { name, typ, exp }) =>  {
-            if *typ != Typ::Void { inc(&mut state.var_syms, *name) }
+            if let Some(n) = name { inc(&mut state.var_syms, *n) }
             exp.as_ref().map(|e| operand(e, state));
         },
         Tree::Block(BlockStatement { label, bbody }) => {

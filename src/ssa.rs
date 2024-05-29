@@ -462,16 +462,17 @@ mod graph {
                     return (nid, ntails);
                 },
                 Tree::Loop(LoopStatement { cond, label, lbody, dowhile }) => {
-                    let next_id = state.alloc.alloc();
                     let (nhead, ntails) = build_graph(next, state);
-                    state.use_label(label, next_id, nhead);
+                    state.use_label(label, state.alloc.len(), nhead);
                     let (lhead, ltails) = build_graph(lbody.into_iter(), state);
                     state.connect(&ltails, nhead);
-                    let next_content = TreeContainer::make(Tree::Loop(LoopStatement {
+                    state.connect(&ltails, lhead);
+                    content.push_back(Tree::Loop(LoopStatement {
                         cond, label, lbody: TreeContainer::new(), dowhile
                     }));
-                    state.alloc.set(next_id, next_content, vec![lhead]);
-                    state.alloc.set(nid, content, vec![next_id]);
+                    let children = if !dowhile { vec![lhead, nhead] }
+                        else { vec![lhead] };
+                    state.alloc.set(nid, content, children);
                     return (nid, ntails);
                 },
                 Tree::If(IfStatement { cond, label, btrue, bfalse }) => {

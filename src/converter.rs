@@ -407,7 +407,7 @@ fn continue_statement(node: Node, state: &mut State) -> TreeContainer {
 
 fn expression_statement(node: Node, state: &mut State) -> TreeContainer {
     TreeContainer::make(Tree::LetP(PrimStatement {
-        name: Some(state.sm.fresh("expr_stmt")),
+        name: None,
         typ: Typ::Void,
         exp: Some(expression(node.child(0).expect("Expression is non-null"), state))
     }))

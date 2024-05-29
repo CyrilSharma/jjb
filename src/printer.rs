@@ -51,12 +51,18 @@ fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
         Tree::LetI(ImportDeclaration { path }) => {
             state.println(&format!("import {};", path));
         },
+        // Typ name;
+        // Typ name = value;
+        // name = value;
+        // value;
         Tree::LetP(PrimStatement { name, typ, exp }) => {
-            let mut header = String::new();
-            if *typ != Typ::Void { header.push_str(&format!("{}", serialize_tp(typ, state))) }
-            if let Some(n) = name { header.push_str(&format!(" {}", state.uname(*n))) }
-            if let Some(e) = exp { header.push_str(&format!(" = {}", serialize_op(e, state))) }
-            header.push_str(";");
+            let header = match (typ, name, exp) {
+                (Typ::Void, Some(n), Some(e)) => format!("{} = {};", state.uname(*n), serialize_op(e, state)),
+                (Typ::Void, None, Some(e)) => format!("{};", serialize_op(e, state)),
+                (t, Some(n), None) => format!("{} {};", serialize_tp(t, state), state.uname(*n)),
+                (t, Some(n), Some(e)) => format!("{} {} = {};", serialize_tp(t, state), state.uname(*n), serialize_op(e, state)),
+                _ => panic!("Invalid Prim Statement")
+            };
             state.println(&header);
         },
         Tree::LetF(FunDeclaration { name, args, modifiers, throws, return_typ, body, constructor }) => {

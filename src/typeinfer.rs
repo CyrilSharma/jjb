@@ -52,7 +52,7 @@ fn statement(tree: &mut Tree, state: &mut State) {
             if *typ == Typ::Unknown {
                 if let Some(e) = exp.as_mut() { *typ = operand(e, state); }
                 if let Some(n) = name { state.typemap.insert(*n, *typ); }
-            } else {
+            } else if *typ != Typ::Void {
                 if let Some(n) = name { state.typemap.insert(*n, *typ); }
             }
         },
