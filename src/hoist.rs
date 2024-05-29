@@ -260,20 +260,21 @@ fn operand(root: &Operand, state: &mut State) -> (TreeContainer, Operand) {
                             PreInc | PostInc => Add,
                             _ => panic!()
                         };
+                        let temp = state.sm.fresh("temp");
                         let args = vec![Operand::V(sym), Operand::C(Literal::Byte(1))];
                         let exp = Some(Operand::T(ExprTree { op: newop, args }));
-                        let mut prims = TreeContainer::make(Tree::LetP(PrimStatement
+                        let mut prims = TreeContainer::new();
+                        if matches!(op, PostDec | PostInc) {
+                            prims.push_back(Tree::LetP(PrimStatement
+                                { name: Some(temp), typ: Typ::Unknown, exp: Some(Operand::V(sym)) }
+                            ));
+                        }
+                        prims.push_back(Tree::LetP(PrimStatement
                             { name: Some(sym), typ: Typ::Void, exp }
                         ));
-                        // if true {
-                        //     state.
-                        //     prims.push_back(Tree::LetP(PrimStatement
-                        //         { name: Some(sym), typ: Typ::Void, exp }
-                        //     ));
-                        // }
                         match op {
                             PreDec | PreInc => (lhsv + prims, Operand::V(sym)),
-                            PostDec | PostInc => (lhsv + prims, Operand::V(sym)),
+                            PostDec | PostInc => (lhsv + prims, Operand::V(temp)),
                             _ => panic!()
                         }
                     },
