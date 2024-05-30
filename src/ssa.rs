@@ -114,10 +114,28 @@ mod transform {
         }
     }
 
-    pub fn transform(tree: TreeContainer, sm: &mut SymbolManager) -> Allocator {
-        let mut allocator = super::graph::build(tree);
-        transform_graph(&mut allocator, sm);
-        allocator
+    pub fn transform(tree: Tree, sm: &mut SymbolManager) -> Tree {
+        match tree {
+            Tree::Program(stmts) => Tree::Program(
+                stmts.into_iter().map(|f| transform(f, sm)).collect()
+            ),
+            Tree::LetI(i) => Tree::LetI(i),
+            Tree::LetF(f) => Tree::LetF({
+                let (mut allocator, next_map) = super::graph::build(f.body);
+                transform_graph(&mut allocator, sm);
+                FunDeclaration {
+                    body: super::graph::fold(allocator, &next_map),
+                    ..f
+                }
+            }),
+            Tree::LetC(c) => Tree::LetC(ClassDeclaration {
+                methods: c.methods.into_iter().map(|f| transform(f, sm)).collect(),
+                ..c
+            }),
+            Tree::LetE(_) => todo!(),
+            Tree::EntryPoint(e) => Tree::EntryPoint(e),
+            _ => panic!("Invalid tree in transform")
+        }
     }
 
     // https://www.cs.cornell.edu/courses/cs6120/2020fa/lesson/5/
@@ -281,6 +299,9 @@ mod transform {
                         let nname = state.sm.refresh(&pname);
                         state.add_name(pname, nname, &mut push_count);
                         p.name = Some(nname);
+                        if p.typ == Typ::Void {
+                            p.typ = Typ::Unknown;
+                        }
                     }
                 },
                 Tree::Switch(s) => rename_operand(&mut s.arg, state),
@@ -371,6 +392,11 @@ mod transform {
         }
         Ok(())
     }
+
+    // TODO 
+    pub fn revert_graph(alloc: &mut Allocator) {
+        todo!()
+    }
 }
 
 mod graph {
@@ -378,7 +404,8 @@ mod graph {
     struct State {
         alloc: Allocator,
         label_map: HashMap<Symbol, Id>,
-        break_map: HashMap<Symbol, Id>
+        break_map: HashMap<Symbol, Id>,
+        next_map: HashMap<Id, Id>
     }
     
     impl State {
@@ -386,7 +413,8 @@ mod graph {
             Self {
                 alloc: Allocator::new(),
                 label_map: HashMap::new(),
-                break_map: HashMap::new()
+                break_map: HashMap::new(),
+                next_map: HashMap::new()
             } 
         }
         pub fn use_label(&mut self, label: Symbol, body: Id, next: Id) {
@@ -412,10 +440,10 @@ mod graph {
         }
     }
 
-    pub fn build(tree: TreeContainer) -> Allocator {
+    pub fn build(tree: TreeContainer) -> (Allocator, HashMap<Id, Id>) {
         let mut state = State::new();
         build_graph(tree.into_iter(), &mut state);
-        state.alloc
+        (state.alloc, state.next_map)
     }
     
     fn build_graph(mut iter: ContainerIntoIter<Tree>, state: &mut State) -> (Id, Box<[Id]>) {
@@ -428,6 +456,7 @@ mod graph {
             match stmt {
                 Tree::Block(BlockStatement { label, bbody }) => {
                     let (nhead, ntails) = build_graph(next, state);
+                    state.next_map.insert(nid, nhead);
                     state.use_label(label, nid, nhead);
                     let (bhead, btails) = build_graph(bbody.into_iter(), state);
                     state.connect(&btails, nhead);
@@ -439,6 +468,7 @@ mod graph {
                 },
                 Tree::Switch(SwitchStatement { arg, label, cases, default }) => {
                     let (nhead, ntails) = build_graph(next, state);
+                    state.next_map.insert(nid, nhead);
                     state.use_label(label, nid, nhead);
                     let mut ncases = Vec::new();
                     let mut children = Vec::new();
@@ -463,6 +493,7 @@ mod graph {
                 },
                 Tree::Loop(LoopStatement { cond, label, lbody, dowhile }) => {
                     let (nhead, ntails) = build_graph(next, state);
+                    state.next_map.insert(nid, nhead);
                     state.use_label(label, state.alloc.len(), nhead);
                     let (lhead, ltails) = build_graph(lbody.into_iter(), state);
                     state.connect(&ltails, nhead);
@@ -470,13 +501,12 @@ mod graph {
                     content.push_back(Tree::Loop(LoopStatement {
                         cond, label, lbody: TreeContainer::new(), dowhile
                     }));
-                    let children = if !dowhile { vec![lhead, nhead] }
-                        else { vec![lhead] };
-                    state.alloc.set(nid, content, children);
+                    state.alloc.set(nid, content, vec![lhead]);
                     return (nid, ntails);
                 },
                 Tree::If(IfStatement { cond, label, btrue, bfalse }) => {
                     let (nhead, ntails) = build_graph(next, state);
+                    state.next_map.insert(nid, nhead);
                     state.use_label(label, nid, nhead);
                     let (thead, ttails) = build_graph(btrue.into_iter(), state);
                     let (fhead, ftails) = build_graph(bfalse.into_iter(), state);
@@ -512,6 +542,44 @@ mod graph {
         state.alloc.set(nid, content, vec![]);
         return (nid, vec![nid].into_boxed_slice());
     }
+
+    pub fn fold(mut allocator: Allocator, next_map: &HashMap<Id, Id>) -> TreeContainer {
+        fold_graph(0, &mut allocator, next_map)
+    }
+
+    fn fold_graph(id: Id, allocator: &mut Allocator, next_map: &HashMap<Id, Id>) -> TreeContainer {
+        let node = std::mem::take(&mut allocator.nodes[id]);
+        let mut content = node.content;
+        let children = node.children;
+        if let Some(s) = content.back_mut() {
+            match s {
+                Tree::Block(b) => {
+                    b.bbody = fold_graph(children[0], allocator, next_map);
+                },
+                Tree::Switch(s) => {
+                    let mut i = 0;
+                    while i < s.cases.len() {
+                        s.cases[i].1 = fold_graph(children[i], allocator, next_map);
+                        i += 1;
+                    }
+                    s.default = fold_graph(children[i], allocator, next_map);
+                }
+                Tree::Loop(l) => {
+                    l.lbody = fold_graph(children[0], allocator, next_map);
+                },
+                Tree::If(istmt) => {
+                    istmt.btrue = fold_graph(children[0], allocator, next_map);
+                    istmt.bfalse = fold_graph(children[1], allocator, next_map);
+                },
+                Tree::Try(_) => todo!(),
+                _ => ()
+            }
+        }
+        if let Some(n) = next_map.get(&id) {
+            content.append(fold_graph(*n, allocator, next_map));
+        }
+        content
+    }
 }
 
 
@@ -522,6 +590,8 @@ mod test {
     use crate::converter::convert;
     use crate::hoist::hoist;
     use crate::parameters::Parameters;
+    use crate::printer::print;
+    use crate::ssa::transform;
     use crate::symbolmanager::SymbolManager;
     use crate::typeinfer::typeinfer;
     use super::print_graph;
@@ -554,21 +624,9 @@ mod test {
         let params = Parameters { entry_class: class_name, entry_name: "main".to_string() };
         let mut ast = convert(tree.root_node(), text.as_bytes(), &params, &mut sm);
         ast = hoist(ast.as_ref(), &mut sm);
+        ast = Box::new(super::transform::transform(*ast, &mut sm));
         typeinfer(ast.as_mut(), &mut sm);
-        match ast.as_ref() {
-            Tree::Program(p) => match p.iter().next().expect("") {
-                Tree::LetC(c) => match c.methods.back().expect("") {
-                    Tree::LetF(f) => {
-                        let graph = super::transform::transform(f.body.clone(), &mut sm);
-                        print_graph(&graph.nodes, &sm);
-                        super::transform::verify(&graph, &sm).expect("Valid SSA")
-                    },
-                    _ => panic!("Missing Function"),
-                },
-                _ => panic!("Missing Class"),
-            },
-            _ => panic!("Missing Program")
-        }
-        assert!(true)
+        print(&ast, &sm);
+        assert!(false)
     }
 }

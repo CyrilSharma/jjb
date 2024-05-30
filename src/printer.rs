@@ -119,8 +119,8 @@ fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
                     ));
                 }
                 state.println("default: ");
+                default.iter().for_each(|d| state.indent(|state| print_tree(d, state)));
             });
-            default.iter().for_each(|d| state.indent(|state| print_tree(d, state)));
             state.println("}");
         },
         Tree::Loop(LoopStatement { cond, lbody, label, dowhile }) => {
