@@ -393,9 +393,64 @@ mod transform {
         Ok(())
     }
 
-    // TODO 
+    pub fn revert(tree: Tree, sm: &mut SymbolManager) -> Tree {
+        match tree {
+            Tree::Program(stmts) => Tree::Program(
+                stmts.into_iter().map(|f| revert(f, sm)).collect()
+            ),
+            Tree::LetI(i) => Tree::LetI(i),
+            Tree::LetF(f) => Tree::LetF({
+                let (mut allocator, next_map) = super::graph::build(f.body);
+                revert_graph(&mut allocator);
+                FunDeclaration {
+                    body: super::graph::fold(allocator, &next_map),
+                    ..f
+                }
+            }),
+            Tree::LetC(c) => Tree::LetC(ClassDeclaration {
+                methods: c.methods.into_iter().map(|f| revert(f, sm)).collect(),
+                ..c
+            }),
+            Tree::LetE(_) => todo!(),
+            Tree::EntryPoint(e) => Tree::EntryPoint(e),
+            _ => panic!("Invalid tree in revert")
+        }
+    }
+
+    // TODO a "redefine" phase, so we have declarations in the proper places.
     pub fn revert_graph(alloc: &mut Allocator) {
-        todo!()
+        let mp = stat(&alloc);
+        let nodes = &mut alloc.nodes;
+        for id in 0..nodes.len() {
+            while let Some(cur) = nodes[id].content.pop_front() {
+                if let Tree::LetP(PrimStatement {
+                    exp: Some(Operand::T(ExprTree { op: Operation::Phi, args })),
+                    name: Some(nm),
+                    ..
+                }) = cur {
+                    for arg in &args[1..] {
+                        let sym = match arg { Operand::V(s) => s, _ => panic!("") };
+                        let assign = Tree::LetP(PrimStatement {
+                            name: Some(nm),
+                            exp: Some(Operand::V(*sym)),
+                            typ: Typ::Void
+                        });
+                        let pred = mp.get(sym).expect("Variable not defined.")
+                                 .iter().next().expect("Invalid Stat Run.");
+
+                        // This could be SUS. Only doing it so we don't mess up fold.
+                        let last_element = nodes[*pred].content.pop_back();
+                        nodes[*pred].content.push_back(assign);
+                        if let Some(l) = last_element {
+                            nodes[*pred].content.push_back(l);
+                        }
+                    }
+                } else {
+                    nodes[id].content.push_front(cur);
+                    break;
+                }
+            }
+        }
     }
 }
 
@@ -625,6 +680,7 @@ mod test {
         let mut ast = convert(tree.root_node(), text.as_bytes(), &params, &mut sm);
         ast = hoist(ast.as_ref(), &mut sm);
         ast = Box::new(super::transform::transform(*ast, &mut sm));
+        ast = Box::new(super::transform::revert(*ast, &mut sm));
         typeinfer(ast.as_mut(), &mut sm);
         print(&ast, &sm);
         assert!(false)

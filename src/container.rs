@@ -30,6 +30,10 @@ impl<T> Container<T> {
         self.container.push_front(v);
     }
 
+    pub fn pop_front(&mut self) -> Option<T> {
+        self.container.pop_front()
+    }
+
     pub fn append(&mut self, mut v: Self) {
         self.container.append(&mut v.container);
     }
