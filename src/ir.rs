@@ -50,19 +50,19 @@ impl Typ {
 
 pub type ArrayInitializer = Vec<Box<ElementInitializer>>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ArrayExpression {
     Empty(Box<Vec<Operand>>),
     Initializer(Box<ArrayInitializer>)
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ElementInitializer {
     Expr(Operand),
     ArrayInitializer(ArrayInitializer)
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Literal {
     Null,
     Bool(bool),
@@ -197,7 +197,7 @@ pub struct ImportDeclaration {
     pub path: String
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Operand {
     This(Symbol),
     Super(Symbol),
@@ -208,7 +208,7 @@ pub enum Operand {
     Tp(Typ)
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ExprTree {
     pub op: Operation,
     pub args: Vec<Operand>
