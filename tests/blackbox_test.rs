@@ -87,7 +87,7 @@ impl JavaFileManager {
     }
 
     fn cache(&self, fname: &str, content: &str) {
-        let cache_path = format!("{}/{}_cache.txt", self.base_dir, fname);
+        let cache_path = format!("{}/.{}_cache", self.base_dir, fname);
         write(cache_path, content).expect("Write Failed!");
     }
 
@@ -101,7 +101,7 @@ impl JavaFileManager {
     /// Reads the cached output if available.
     fn read_cache(&self, fname: &str) -> Result<String, std::io::Error> {
         println!("I'm running!");
-        let cache_path = format!("{}/{}_cache.txt", self.base_dir, fname);
+        let cache_path = format!("{}/.{}_cache", self.base_dir, fname);
         fs::read_to_string(cache_path)
     }
 
@@ -210,6 +210,16 @@ method_test!(ternary, r#"
     System.out.println(a ? 1 : -1);
     boolean b = true;
     System.out.println(b ? 1 : -1);
+"#);
+
+method_test!(undefined, r#"
+    int a, b, c, d, e, f;
+    a = 2; b = 2; c = 2;
+    d = 2; e = 2; f = 2;
+    System.out.printf(
+        "%d %d %d %d %d %d\n",
+        a, b, c, d, e, f
+    );
 "#);
 
 method_test!(prim_arith, r#"
