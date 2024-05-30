@@ -4,6 +4,7 @@ use jjb::optimizer::optimize;
 use jjb::parameters::Parameters;
 use jjb::printer::print;
 use jjb::hoist::hoist;
+use jjb::ssa;
 use jjb::{converter::convert, ir::Tree, printer::str_print, symbolmanager::SymbolManager};
 use jjb::typeinfer::typeinfer;
 use tree_sitter::Parser;
@@ -154,8 +155,10 @@ fn test(name: &str, source: &str, compile: &str) {
     let params = Parameters { entry_class: class_name, entry_name: "main".to_string() };
     let mut ast = convert(tree.root_node(), compile.as_bytes(), &params, &mut sm);
     ast = hoist(ast.as_ref(), &mut sm);
-    // ast = optimize(ast.as_ref(), &mut sm);
     typeinfer(ast.as_mut(), &mut sm);
+    ast = Box::new(ssa::transform::transform(*ast, &mut sm));
+    ast = Box::new(ssa::transform::revert(*ast, &mut sm));
+    // ast = optimize(ast.as_ref(), &mut sm);
     test_equal(source, compile, &ast, &sm, name, &params);
 }
 
@@ -462,6 +465,16 @@ method_test!(label_1, r#"
     label: {
         count += 1;
         if (count == 1) { break label; }
+        count += 1;
+    }
+    System.out.println(count);
+"#);
+
+method_test!(label_loop, r#"
+    int count = 0;
+    label: while (++count < 30) {
+        count += 1;
+        if (count % 2 != 1) { continue label; }
         count += 1;
     }
     System.out.println(count);

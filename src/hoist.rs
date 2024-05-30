@@ -298,6 +298,26 @@ fn operand(root: &Operand, state: &mut State) -> (TreeContainer, Operand) {
                 let (mhsv, m) = operand(&args[2], state);
                 let op = Operand::T(ExprTree { op: *op, args: vec![l, r, m] });
                 wrap_prim(lhsv + rhsv + mhsv, op, state)
+                // Hold off on ternary hoisting until we have
+                // Better type resolution....
+                // let res = state.sm.fresh("ternary");
+                // let mut list = lhsv + rhsv + mhsv;
+                // list.push_back(Tree::LetP(PrimStatement {
+                //     name: Some(res),
+                //     typ: Typ::Unknown,
+                //     exp: None
+                // }));
+                // list.push_back(Tree::If(IfStatement {
+                //     cond: l,
+                //     label: state.sm.fresh("ternary"),
+                //     btrue: TreeContainer::make(Tree::LetP(PrimStatement {
+                //         name: Some(res), typ: Typ::Void, exp: Some(r)
+                //     })),
+                //     bfalse: TreeContainer::make(Tree::LetP(PrimStatement {
+                //         name: Some(res), typ: Typ::Void, exp: Some(m)
+                //     })),
+                // }));
+                // (list, Operand::V(res))
             },
             ArrayNew if args.len() == 2 => {
                 let (rhsv, r) = operand(&args[1], state);

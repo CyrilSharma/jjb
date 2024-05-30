@@ -10,4 +10,5 @@ pub mod container;
 pub mod typeinfer;
 pub mod optimizer;
 pub mod parameters;
+pub mod ssa;
 mod substitution;

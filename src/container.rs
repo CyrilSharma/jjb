@@ -49,6 +49,17 @@ impl<T> Container<T> {
     pub fn pop_back(&mut self) -> Option<T> {
         self.container.pop_back()
     }
+
+    pub fn retain<F>(&mut self, mut f: F)
+        where F: FnMut(&mut T) -> bool {
+        let mut new_container = LinkedList::new();
+        while let Some(mut item) = self.container.pop_front() {
+            if f(&mut item) {
+                new_container.push_back(item);
+            }
+        }
+        self.container = new_container;
+    }
 }
 
 #[derive(Clone)]

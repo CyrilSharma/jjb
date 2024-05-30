@@ -82,7 +82,7 @@ impl Allocator {
     }
 }
 
-mod transform {
+pub mod transform {
     use fixedbitset::FixedBitSet;
     use crate::ir::{ExprTree, Operand};
     use std::collections::HashSet;
@@ -95,22 +95,34 @@ mod transform {
 
     impl<'l> State<'l> {
         fn add_name(&mut self, sym: Symbol, nname: Symbol, push_count: &mut HashMap<Symbol, usize>) {
+            println!("==> added {} -> {}", self.sm.uname(sym), self.sm.uname(nname));
             let stk = self.stack.entry(sym).or_insert(Vec::new());
             stk.push(nname);
             let entry = push_count.entry(sym).or_insert(0);
             *entry += 1;
         }
         fn get_name(&mut self, sym: Symbol) -> Symbol {
-            *self.stack.get(&sym).unwrap_or(
-                &vec![sym] // if the symbol wasn't declared, it's a class and is reserved...
-            ).last().expect("Undefined Name")
+            *self.stack.get(&sym).unwrap_or(&vec![sym])
+                .last().expect(&format!(
+                    "Symbol {} was undefined",
+                    self.sm.uname(sym)
+                )
+            )
         }
-        fn restore_stack(&mut self, push_count: &mut HashMap<Symbol, usize>) {
+        fn restore_stack(&mut self, mut push_count: HashMap<Symbol, usize>) {
+            let mut dead = Vec::new();
             for (sym, stack) in self.stack.iter_mut() {
-                if let Some(amt) = push_count.get(&sym) {
+                if let Some(mut amt) = push_count.remove(&sym) {
                     stack.truncate(stack.len() - amt);
+                    // while amt != 0 {
+                    //     let nname = stack.pop().expect("");
+                    //     println!("==> removed {} -> {}", self.sm.uname(*sym), self.sm.uname(nname));
+                    //     amt -= 1;
+                    // }
+                    if stack.len() == 0 { dead.push(*sym) }
                 }
             }
+            for sym in dead { self.stack.remove(&sym); }
         }
     }
 
@@ -122,7 +134,9 @@ mod transform {
             Tree::LetI(i) => Tree::LetI(i),
             Tree::LetF(f) => Tree::LetF({
                 let (mut allocator, next_map) = super::graph::build(f.body);
+                print_graph(&allocator.nodes, sm);
                 transform_graph(&mut allocator, sm);
+                // print_graph(&allocator.nodes, sm);
                 FunDeclaration {
                     body: super::graph::fold(allocator, &next_map),
                     ..f
@@ -143,12 +157,12 @@ mod transform {
         let (doms, dominance_frontier) = dominance(alloc);
         let mut idom: Vec<Vec<usize>> = vec![Vec::new(); alloc.len()];
         for (i, d) in doms.into_iter().enumerate() { if d != i { idom[d].push(i) } }
-        let vars = stat(alloc);
+        let (vars, typs) = stat(alloc);
         for (v, mut block_set) in vars {
             let mut blocks: Vec<Id> = block_set.clone().into_iter().collect();
             while let Some(vassigned) = blocks.pop() {
                 for block in dominance_frontier[vassigned].ones() {
-                    insert_phi(v, block, alloc);
+                    insert_phi(v, typs[&v], block, alloc);
                     if !block_set.contains(&block) {
                         block_set.insert(block);
                         blocks.push(block);
@@ -158,7 +172,7 @@ mod transform {
         }
         
         let mut state = State { stack: HashMap::new(), sm };
-        rename(0, &mut state, alloc, &idom);
+        rename(0, &mut state, alloc, &typs, &idom);
     }
 
     pub fn dominance(alloc: &Allocator) -> (Vec<Id>, Vec<FixedBitSet>) {
@@ -231,8 +245,12 @@ mod transform {
         (doms, df)
     }
 
-    pub fn stat(alloc: &Allocator) -> HashMap<Symbol, HashSet<usize>> {
+    pub fn stat(alloc: &Allocator) -> (
+        HashMap<Symbol, HashSet<usize>>,
+        HashMap<Symbol, Typ>,
+    ) {
         let mut mp = HashMap::new();
+        let mut typ = HashMap::new();
         for id in 0..alloc.len() {
             let content = &alloc.grab(id).content;
             for tree in content {
@@ -240,6 +258,7 @@ mod transform {
                     Tree::LetP(p) => if let Some(pname) = p.name {
                         let id_set = mp.entry(pname).or_insert(HashSet::new());
                         id_set.insert(id);
+                        if p.typ != Typ::Void { typ.insert(pname, p.typ); }
                     },
                     Tree::Block(_) | Tree::Switch(_) | Tree::LetI(_) | 
                     Tree::Loop(_) | Tree::If(_) | Tree::Return(_) |
@@ -248,14 +267,13 @@ mod transform {
                 }
             }
         }
-        mp
+        (mp, typ)
     }
 
-    pub fn insert_phi(v: Symbol, block: Id, alloc: &mut Allocator) {
-        fn phi(v: Symbol) -> Tree {
+    pub fn insert_phi(v: Symbol, typ: Typ, block: Id, alloc: &mut Allocator) {
+        fn phi(v: Symbol, typ: Typ) -> Tree {
             Tree::LetP(PrimStatement {
-                name: Some(v),
-                typ: Typ::Unknown,
+                name: Some(v), typ,
                 exp: Some(Operand::T(ExprTree {
                     // The first argument is reserved for tracking the original variable.
                     op: Operation::Phi, args: vec![Operand::V(v)],
@@ -281,11 +299,12 @@ mod transform {
         if let Some(head) = node.content.iter_mut().next() {
             if has_phi(head, v) { return }
         }
-        node.content.push_front(phi(v));
+        node.content.push_front(phi(v, typ));
     }
 
     // https://www.cs.cornell.edu/courses/cs6120/2020fa/lesson/5/
-    fn rename(id: Id, state: &mut State, alloc: &mut Allocator, idom: &Vec<Vec<Id>>) {
+    fn rename(id: Id, state: &mut State, alloc: &mut Allocator,
+              typs: &HashMap<Symbol, Typ>, idom: &Vec<Vec<Id>>) {
         let mut push_count = HashMap::new();
         let content = alloc.grab_mut(id).content.iter_mut();
         for tree in content {
@@ -299,9 +318,7 @@ mod transform {
                         let nname = state.sm.refresh(&pname);
                         state.add_name(pname, nname, &mut push_count);
                         p.name = Some(nname);
-                        if p.typ == Typ::Void {
-                            p.typ = Typ::Unknown;
-                        }
+                        p.typ = typs[&pname];
                     }
                 },
                 Tree::Switch(s) => rename_operand(&mut s.arg, state),
@@ -337,18 +354,25 @@ mod transform {
             }
         }
         alloc.grab_mut(id).children = children;
-        for &child in &idom[id] { rename(child, state, alloc, idom) }
-        state.restore_stack(&mut push_count);
+        println!("push parent: {}", id);
+        for &child in &idom[id] {
+            rename(child, state, alloc, typs, idom)
+        }
+        println!("pop parent: {}", id);
+        state.restore_stack(push_count);
     }
 
     fn rename_operand(op: &mut Operand, state: &mut State) {
         match op {
             Operand::This(_) | Operand::Super(_) |
             Operand::C(_) | Operand::Tp(_) => (),
-            Operand::V(sym) => *sym = state.get_name(*sym),
+            Operand::V(sym) => {
+                println!("before - {}", state.sm.uname(*sym));
+                *sym = state.get_name(*sym);
+                println!("after - {}", state.sm.uname(*sym));
+            },
             Operand::T(ExprTree { op, args }) => match op {
                 Operation::InstanceOf | Operation::Throw => todo!(),
-                Operation::Ternary => panic!("Ternary Operators should have been hoisted!"),
                 Operation::ArrayNew => rename_operand(&mut args[1], state),
                 Operation::Phi => args[1..].iter_mut().for_each(|a| rename_operand(a, state)),
                 Operation::InvokeVirtual => {
@@ -402,6 +426,7 @@ mod transform {
             Tree::LetF(f) => Tree::LetF({
                 let (mut allocator, next_map) = super::graph::build(f.body);
                 revert_graph(&mut allocator);
+                fix_declarations(&mut allocator);
                 FunDeclaration {
                     body: super::graph::fold(allocator, &next_map),
                     ..f
@@ -419,30 +444,43 @@ mod transform {
 
     // TODO a "redefine" phase, so we have declarations in the proper places.
     pub fn revert_graph(alloc: &mut Allocator) {
-        let mp = stat(&alloc);
+        let (mp, _) = stat(&alloc);
         let nodes = &mut alloc.nodes;
         for id in 0..nodes.len() {
             while let Some(cur) = nodes[id].content.pop_front() {
                 if let Tree::LetP(PrimStatement {
                     exp: Some(Operand::T(ExprTree { op: Operation::Phi, args })),
                     name: Some(nm),
-                    ..
+                    typ
                 }) = cur {
                     for arg in &args[1..] {
                         let sym = match arg { Operand::V(s) => s, _ => panic!("") };
                         let assign = Tree::LetP(PrimStatement {
                             name: Some(nm),
                             exp: Some(Operand::V(*sym)),
-                            typ: Typ::Void
+                            typ
                         });
                         let pred = mp.get(sym).expect("Variable not defined.")
                                  .iter().next().expect("Invalid Stat Run.");
 
-                        // This could be SUS. Only doing it so we don't mess up fold.
+                        // This is implicit in SSA usually. We actually need it here though.
                         let last_element = nodes[*pred].content.pop_back();
-                        nodes[*pred].content.push_back(assign);
                         if let Some(l) = last_element {
-                            nodes[*pred].content.push_back(l);
+                            match l {
+                                Tree::Block(_) | Tree::Switch(_) |
+                                Tree::Loop(_)  | Tree::If(_) |
+                                Tree::Try(_) | Tree::Return(_) |
+                                Tree::Break(_) | Tree::Continue(_) => {
+                                    nodes[*pred].content.push_back(assign);
+                                    nodes[*pred].content.push_back(l);
+                                }
+                                _ => {
+                                    nodes[*pred].content.push_back(l);
+                                    nodes[*pred].content.push_back(assign);
+                                }
+                            }
+                        } else {
+                            nodes[*pred].content.push_back(assign);
                         }
                     }
                 } else {
@@ -450,6 +488,47 @@ mod transform {
                     break;
                 }
             }
+        }
+    }
+
+    pub fn fix_declarations(alloc: &mut Allocator) {
+        let mut decl = HashMap::new();
+        let nodes = &mut alloc.nodes;
+        for id in 0..nodes.len() {
+            nodes[id].content.retain(|item| {
+                match item {
+                    Tree::LetP(PrimStatement { name: Some(sym), typ, exp }) 
+                    if *typ != Typ::Void => {
+                        decl.insert(*sym, *typ);
+                        *typ = Typ::Void;
+                        exp.is_some()
+                    },
+                    _ => true
+                }
+            })
+        }
+        for (name, typ) in decl {
+            nodes[0].content.push_front(Tree::LetP({
+                let lit = match typ {
+                    Typ::Unknown => panic!("Unknown type!"),
+                    Typ::Void => panic!("Void type!"),
+                    Typ::Bool => Literal::Bool(false),
+                    Typ::Char => Literal::Char('\0'),
+                    Typ::Byte => Literal::Byte(0),
+                    Typ::Int => Literal::Int(0),
+                    Typ::Short => Literal::Short(0),
+                    Typ::Long => Literal::Long(0),
+                    Typ::Float => Literal::Float(0.0),
+                    Typ::Double => Literal::Double(0.0),
+                    Typ::Str => Literal::Null,
+                    Typ::Array(_) => Literal::Null,
+                    Typ::Class(_) => Literal::Null
+                };
+                PrimStatement {
+                    name: Some(name), typ,
+                    exp: Some(Operand::C(lit))
+                }
+            }));
         }
     }
 }
@@ -656,17 +735,8 @@ mod test {
         let text = r#"
         public class Test {
             public static void main(String[] args) {
-                int cnt = 0;
-                while (cnt++ < 50) {
-                    switch (cnt % 5) {
-                        case 0: do { cnt++; } while (cnt < 10);
-                        case 1: break;
-                        case 2: do { cnt++; } while (cnt < 1);;
-                        case 3: continue;
-                        case 4: cnt *= cnt;
-                    }
-                }
-                System.out.println(cnt);
+                int a;
+                a = 1;
             }
         }
         "#;
@@ -679,10 +749,12 @@ mod test {
         let params = Parameters { entry_class: class_name, entry_name: "main".to_string() };
         let mut ast = convert(tree.root_node(), text.as_bytes(), &params, &mut sm);
         ast = hoist(ast.as_ref(), &mut sm);
-        ast = Box::new(super::transform::transform(*ast, &mut sm));
-        ast = Box::new(super::transform::revert(*ast, &mut sm));
         typeinfer(ast.as_mut(), &mut sm);
+
+        ast = Box::new(super::transform::transform(*ast, &mut sm));
         print(&ast, &sm);
-        assert!(false)
+        ast = Box::new(super::transform::revert(*ast, &mut sm));
+        print(&ast, &sm);
+        assert!(true)
     }
 }

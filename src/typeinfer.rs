@@ -115,9 +115,7 @@ fn operand(op: &mut Operand, state: &mut State) -> Typ {
             L::Double(_) => Typ::Double,
             L::String(_) => Typ::Str
         }
-        O::V(sym) => *state.typemap.get(&sym).expect(&format!(
-            "Symbol {} was not inserted!", state.sm.uname(*sym)
-        )),
+        O::V(sym) => *state.typemap.get(&sym).unwrap_or(&Typ::Unknown),
         O::A(_) => panic!("Array Operand should be handled specially."),
         O::T(ExprTree { op, args }) => match op {
             Add | Sub | Mul | Div | Mod |
@@ -133,7 +131,13 @@ fn operand(op: &mut Operand, state: &mut State) -> Typ {
                 operand(&mut args[1], state)
             },
             InstanceOf => todo!(),
-            Phi => Typ::Unknown,
+            Phi => {
+                for arg in args[1..].iter_mut() {
+                    let typ = operand(arg, state);
+                    if typ != Typ::Unknown { return typ }
+                }
+                return Typ::Unknown
+            },
             PreInc | PreDec | Not | Sub |
             PostInc | PostDec if args.len() == 1 => operand(&mut args[0], state),
             Ternary if args.len() == 3 => {

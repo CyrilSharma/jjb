@@ -467,6 +467,7 @@ fn switch_statement(node: Node, state: &mut State) -> TreeContainer {
                 }
             },
             "switch_rule" => panic!("switch_rule is unsupported"),
+            "line_comment" | "block_comment" => (),
             _ => break
         }
     }
@@ -486,7 +487,7 @@ fn switch_block_statement_group(node: Node, state: &mut State) -> (Vec<Operand>,
     loop {
         let child = cur.node();
         match child.kind() {
-            "switch_label" => switch_label(child, state).map(|e| ops.push(e)),
+            "switch_label" => { switch_label(child, state).map(|e| ops.push(e)); },
             _ => break
         };
         if !cur.goto_next_sibling() { return (ops, TreeContainer::new()) }
@@ -587,7 +588,11 @@ fn for_statement(node: Node, state: &mut State) -> TreeContainer {
     }
 
     lbody = tail(lbody, Tree::Continue(loop_label));
-    let cond = expression(state.tsret.get_field(&node, "condition"), state);
+    let cond = if let Some(c) = node.child_by_field_name("condition") {
+        expression(c, state)
+    } else {
+        Operand::C(Literal::Bool(true))
+    };
     res.push_back(Tree::Loop(LoopStatement { cond, label: loop_label, lbody, dowhile: false }));
     state.scope_out();
     res
