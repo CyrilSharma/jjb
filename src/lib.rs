@@ -12,4 +12,5 @@ pub mod optimizer;
 pub mod parameters;
 pub mod ssa;
 pub mod graph;
+pub mod flatten;
 mod substitution;
