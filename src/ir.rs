@@ -214,7 +214,7 @@ pub struct ExprTree {
     pub args: Vec<Operand>
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PrimStatement {
     pub name: Option<Symbol>,
     pub typ: Typ,

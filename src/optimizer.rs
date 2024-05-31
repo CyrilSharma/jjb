@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::ir::{Tree, TreeContainer, Typ};
+use crate::ir::{Literal, Tree, TreeContainer, Typ};
 use crate::container::*;
 use crate::substitution::Substitution;
 use crate::symbolmanager::{Symbol, SymbolManager};
@@ -22,6 +22,7 @@ struct OptimizeState<'l> {
     census: HashMap<Symbol, usize>,
     f_env: HashMap<Symbol, FunDef>,
     l_env: HashMap<Symbol, TreeContainer>,
+    const_env: HashMap<Symbol, Literal>,
     next: Option<ContainerIntoIter<Tree>>,
     inline: Option<InlineInfo>,
     sm: &'l mut SymbolManager
@@ -34,6 +35,7 @@ impl<'l> OptimizeState<'l> {
             subst: Substitution::new(),
             f_env: HashMap::new(),
             l_env: HashMap::new(),
+            const_env: HashMap::new(),
             inline: None,
             next: None,
             sm
@@ -60,6 +62,14 @@ impl<'l> OptimizeState<'l> {
         let mut cont = TreeContainer::new();
         self.next.clone().map(|n| n.for_each(|c| cont.push_back(c.clone())));
         self.l_env.insert(sym, cont);
+    }
+
+    pub fn add_const(&mut self, name: Symbol, l: Literal) {
+        self.const_env.insert(name, l);
+    }
+
+    pub fn add_subst(&mut self, name: Symbol, nname: Symbol) {
+        self.subst.add_subst(name, nname);
     }
 
     pub fn with_inline<T>(&mut self, label: Symbol, name: Option<Symbol>,
@@ -108,7 +118,15 @@ pub mod shrink {
         let counts = census::census(&root);
         let mut state = State::new(counts, sm);
         initialize_state(&root, &mut state);
-        Box::new(Tree::Program(traverse(root, &mut state)))
+        // This should either be fixed point iteration or a worklist algorithm.
+        // As a naive starting point, you can make this faster by
+        // Tracking on a per function basis if it needs restarting.
+        // Doing all the functions in parallel.
+        Box::new({
+            let mut cur = root;
+            for _ in 0..20 { cur = Tree::Program(traverse(cur, &mut state)) }
+            cur
+        })
     }
 
     fn initialize_state(root: &Tree, state: &mut State) {
@@ -168,55 +186,94 @@ pub mod shrink {
                 methods: traverselist(c.methods, state), ..c
             })),
             Tree::LetE(_) => todo!(),
-            Tree::LetP(PrimStatement { exp: None, .. }) => TreeContainer::make(root),
-            Tree::LetP(PrimStatement { exp: Some(Op::T(ExprTree { ref op, ref args })), ref name, .. })
-                if matches!(op, InvokeVirtual | InvokeStatic) => {
-                let idx = if matches!(op, New) { 0 } else { 1 };
-                let fsym = match args[idx] { Op::V(sym) => sym, _ => panic!("Invalid Call") };
-                if let Some(f) = state.f_env.get(&fsym).cloned() {
-                    let cargs = args.iter().map(|s| match s {
-                        Op::V(sym) => state.subst(*sym),
-                        _ => panic!("Function should only have symbolic arguments!")
-                    }).collect();
-                    let nargs = f.args.clone();
-                    let funname = state.sm.name(fsym).to_owned();
-                    let label = state.sm.fresh(&funname);
-                    let obj = if matches!(op, InvokeVirtual) {
-                        Some(match args[0] { Op::V(sym) => sym, _ => panic!("Invalid Call") })
-                    } else {
-                        None
-                    };
+            Tree::LetP(PrimStatement { exp: None, name: Some(name), .. }) =>
+                if state.dead(name) { TreeContainer::new() }
+                else { TreeContainer::make(root) }
+            Tree::LetP(PrimStatement { exp, name, typ })
+                if matches!(&exp, Some(Op::T(
+                    ExprTree { op: InvokeVirtual | InvokeStatic | New, .. }
+                ))) => {
 
-                    let mut list = TreeContainer::new();
-                    // if matches!(op, New) {
-                    //     let csym = match args[0] { Op::V(csym) => csym, _ => panic!("Invalid New!") };
-                    //     let ctyp = state.sm.classtyp(csym).expect("Class Type isn't defined!");
-                    //     let members: Vec<_> = ctyp.members.clone();
-                    //     for (sym, typ) in members.iter() {
-                    //         let name = state.sm.refresh(&sym);
-                    //         list.push_back(Tree::LetP(PrimStatement {
-                    //             name, typ: *typ, exp: None
-                    //         }));
-                    //     }
-                    // }
-                    // This is kind of horrible. Do this all in one function?
-                    let bbody = state.with_inline(label, todo!(), obj, |s|
-                        s.withoutApps(|s|
-                            s.withSubst(cargs, nargs, |s|
-                                traverselist(f.body.clone(), s)
-                            )
-                        )
-                    );
-                    list.push_back(Tree::LetP(PrimStatement { name: *name, typ: f.rtyp.clone(), exp: None }));
-                    list.push_back(Tree::Block(BlockStatement { label, bbody }));
-                    list
-                } else {
-                    TreeContainer::make(root)
-                }
+                // Disable function inlining for now.
+                let exp = exp.map(|op| substop(op, state));
+                TreeContainer::make(Tree::LetP(PrimStatement { exp, name, typ }))
+
+                // let idx = if matches!(op, New) { 0 } else { 1 };
+                // let fsym = match args[idx] { Op::V(sym) => sym, _ => panic!("Invalid Call") };
+                // if let Some(f) = state.f_env.get(&fsym).cloned() {
+                //     let cargs = args.iter().map(|s| match s {
+                //         Op::V(sym) => state.subst(*sym),
+                //         _ => panic!("Function should only have symbolic arguments!")
+                //     }).collect();
+                //     let nargs = f.args.clone();
+                //     let funname = state.sm.name(fsym).to_owned();
+                //     let label = state.sm.fresh(&funname);
+                //     let obj = if matches!(op, InvokeVirtual) {
+                //         Some(match args[0] { Op::V(sym) => sym, _ => panic!("Invalid Call") })
+                //     } else {
+                //         None
+                //     };
+
+                //     let mut list = TreeContainer::new();
+                //     let bbody = state.with_inline(label, *name, obj, |s|
+                //         s.withoutApps(|s|
+                //             s.withSubst(cargs, nargs, |s|
+                //                 traverselist(f.body.clone(), s)
+                //             )
+                //         )
+                //     );
+                //     list.push_back(Tree::LetP(PrimStatement { name: *name, typ: f.rtyp.clone(), exp: None }));
+                //     list.push_back(Tree::Block(BlockStatement { label, bbody }));
+                //     list
+                // } else {
+                //     TreeContainer::make(root)
+                // }
             },
-            Tree::LetP(PrimStatement { exp: Some(op), name, typ }) => TreeContainer::make(
-                Tree::LetP(PrimStatement { name, typ, exp: Some(substop(op, state)) })
-            ),
+            Tree::LetP(PrimStatement { exp: Some(Op::T(ExprTree { op: Phi, args })), name: Some(name), typ }) => {
+                if state.dead(name) { return TreeContainer::new() }
+                let mut nargs = vec![args[0].clone()];
+                for i in 1..args.len() {
+                    let op = args[i].clone();
+                    let sub = substop(op, state);
+                    nargs.push(sub);
+                }
+                if nargs.len() == 1 { return TreeContainer::new() }
+                if nargs.len() == 2 { return TreeContainer::make(Tree::LetP(PrimStatement
+                    { exp: Some(args[1].clone()), name: Some(name), typ }
+                )) }
+                TreeContainer::make(Tree::LetP(PrimStatement
+                    { exp: Some(Op::T(ExprTree { op: Phi, args: nargs })), name: Some(name), typ }
+                )) 
+            },
+            Tree::LetP(PrimStatement { exp: Some(Operand::C(l)), name: Some(name), typ }) => {
+                if state.dead(name) { return TreeContainer::new() }
+                state.add_const(name, l.clone());
+                return TreeContainer::make(Tree::LetP(PrimStatement {
+                    exp: Some(Operand::C(l)), name: Some(name), typ
+                }))
+            },
+            Tree::LetP(PrimStatement { exp: Some(Operand::V(l)), name: Some(name), .. }) => {
+                if state.dead(name) { return TreeContainer::new() }
+                let nname = state.subst(l);
+                if name != nname { state.add_subst(name, nname) }
+                return TreeContainer::new() 
+            },
+            Tree::LetP(PrimStatement { exp: Some(Operand::A(l)), name: Some(name), typ }) => {
+                if state.dead(name) { return TreeContainer::new() }
+                TreeContainer::make(Tree::LetP(PrimStatement {
+                    exp: Some(substop(Operand::A(l), state)), name: Some(name), typ
+                }))
+            },
+            Tree::LetP(PrimStatement { exp: Some(Operand::T(e)), name: Some(name), typ }) => {
+                TreeContainer::make(Tree::LetP(PrimStatement {
+                    name: Some(name), typ, exp: Some(substop(Operand::T(e), state))
+                }))
+            },
+            Tree::LetP(PrimStatement { name, typ, exp }) => {
+                TreeContainer::make(Tree::LetP(PrimStatement {
+                    name, typ, exp: exp.map(|e| substop(e, state))
+                }))
+            }, 
             Tree::Block(b) => {
                 if state.applied_once(b.label) { state.addc(b.label) }
                 let bbody = traverselist(b.bbody, state);
@@ -281,7 +338,9 @@ pub mod shrink {
                 let inline = state.inline.as_ref().unwrap();
                 TreeContainer::make(Tree::Break(inline.label))
             },
-            Tree::Return(_) => TreeContainer::make(root),
+            Tree::Return(ReturnStatement { val }) => TreeContainer::make(
+                Tree::Return(ReturnStatement { val: val.map(|op| substop(op, state)) })
+            ),
             Tree::Continue(_) => TreeContainer::make(root),
             Tree::EntryPoint(_) => TreeContainer::make(root)
         }
@@ -318,6 +377,31 @@ pub mod shrink {
             E::Expr(op) => E::Expr(substop(op, state)),
             E::ArrayInitializer(c) => E::ArrayInitializer(substarray(c, state))
         })).collect()
+    }
+
+    fn impure(op: Operation, lvalue: bool) -> bool {
+        match op {
+            Operation::InvokeVirtual => true,
+            Operation::InvokeStatic => true,
+            Operation::Assert => true,
+            Operation::Throw => true,
+            Operation::Access => lvalue,
+            Operation::Index => lvalue,
+            _ => false
+        }
+    }
+
+    fn unstable(op: Operation, lvalue: bool) -> bool {
+        match op {
+            Operation::InvokeVirtual => true,
+            // It might take in an object, which would make it unstable.
+            Operation::InvokeStatic => true,
+            Operation::Assert => true,
+            Operation::Throw => true,
+            Operation::Access => lvalue,
+            Operation::Index => lvalue,
+            _ => false
+        }
     }
 }
 
@@ -360,13 +444,16 @@ pub mod census {
             Tree::LetP(p) => p.exp.iter().for_each(|e| operand(e, state)),
             Tree::Block(b) => b.bbody.iter().for_each(|s| traverse(s, state)),
             Tree::Switch(SwitchStatement { arg, label, cases, default }) => {
+                operand(arg, state);
                 for (ops, code) in cases { code.iter().for_each(|t| traverse(t, state)) }
                 for d in default { traverse(d, state) }
             },
             Tree::Loop(LoopStatement { cond, label, lbody, dowhile }) => {
+                operand(cond, state);
                 for l in lbody { traverse(l, state) };
             },
             Tree::If(IfStatement { cond, label, btrue, bfalse }) => {
+                operand(cond, state);
                 for b in btrue { traverse(b, state) }
                 for b in bfalse { traverse(b, state) }
             }
@@ -384,17 +471,23 @@ pub mod census {
             Operand::This(_) => (),
             Operand::Super(_) => (),
             Operand::C(_) => (),
-            Operand::V(sym) => (), /* until we have SSA */
-            Operand::T(ExprTree { op: New, args }) => match args[0] {
-                Operand::V(sym) => state.inc(sym),
+            Operand::V(sym) => state.inc(*sym),
+            Operand::T(ExprTree { op: New, args }) => match args.as_slice() {
+                [Operand::V(sym), rest @ ..] => {
+                    state.inc(*sym); rest.iter().for_each(|op| operand(op, state));
+                }
                 _ => assert!(false, "Invalid Call operation!")
             }
             Operand::T(ExprTree { op: InvokeVirtual, args }) => match args.as_slice() {
-                [_, Operand::V(sym), rest @ ..] => state.inc(*sym),
+                [_, Operand::V(sym), rest @ ..] => {
+                    state.inc(*sym); rest.iter().for_each(|op| operand(op, state));
+                }
                 _ => assert!(false, "Invalid Call operation!"),
             },
             Operand::T(ExprTree { op: InvokeStatic, args }) => match args.as_slice() {
-                [_, Operand::V(sym), rest @ ..] => state.inc(*sym),
+                [_, Operand::V(sym), rest @ ..] => {
+                    state.inc(*sym); rest.iter().for_each(|op| operand(op, state));
+                },
                 _ => assert!(false, "Invalid Call operation!"),
             }
             Operand::T(ExprTree { op, args }) => args.iter().for_each(|a| operand(a, state)),

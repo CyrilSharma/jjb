@@ -95,7 +95,7 @@ pub mod transform {
 
     impl<'l> State<'l> {
         fn add_name(&mut self, sym: Symbol, nname: Symbol, push_count: &mut HashMap<Symbol, usize>) {
-            println!("==> added {} -> {}", self.sm.uname(sym), self.sm.uname(nname));
+            // println!("==> added {} -> {}", self.sm.uname(sym), self.sm.uname(nname));
             let stk = self.stack.entry(sym).or_insert(Vec::new());
             stk.push(nname);
             let entry = push_count.entry(sym).or_insert(0);
@@ -134,7 +134,6 @@ pub mod transform {
             Tree::LetI(i) => Tree::LetI(i),
             Tree::LetF(f) => Tree::LetF({
                 let (mut allocator, next_map) = super::graph::build(f.body);
-                print_graph(&allocator.nodes, sm);
                 transform_graph(&mut allocator, sm);
                 // print_graph(&allocator.nodes, sm);
                 FunDeclaration {
@@ -354,11 +353,9 @@ pub mod transform {
             }
         }
         alloc.grab_mut(id).children = children;
-        println!("push parent: {}", id);
         for &child in &idom[id] {
             rename(child, state, alloc, typs, idom)
         }
-        println!("pop parent: {}", id);
         state.restore_stack(push_count);
     }
 
@@ -367,9 +364,7 @@ pub mod transform {
             Operand::This(_) | Operand::Super(_) |
             Operand::C(_) | Operand::Tp(_) => (),
             Operand::V(sym) => {
-                println!("before - {}", state.sm.uname(*sym));
                 *sym = state.get_name(*sym);
-                println!("after - {}", state.sm.uname(*sym));
             },
             Operand::T(ExprTree { op, args }) => match op {
                 Operation::InstanceOf | Operation::Throw => todo!(),
@@ -425,7 +420,7 @@ pub mod transform {
             Tree::LetI(i) => Tree::LetI(i),
             Tree::LetF(f) => Tree::LetF({
                 let (mut allocator, next_map) = super::graph::build(f.body);
-                revert_graph(&mut allocator);
+                revert_graph(&mut allocator, sm);
                 fix_declarations(&mut allocator);
                 FunDeclaration {
                     body: super::graph::fold(allocator, &next_map),
@@ -443,8 +438,8 @@ pub mod transform {
     }
 
     // TODO a "redefine" phase, so we have declarations in the proper places.
-    pub fn revert_graph(alloc: &mut Allocator) {
-        let (mp, _) = stat(&alloc);
+    pub fn revert_graph(alloc: &mut Allocator, sm: &SymbolManager) {
+        let (mp, _) = stat(alloc);
         let nodes = &mut alloc.nodes;
         for id in 0..nodes.len() {
             while let Some(cur) = nodes[id].content.pop_front() {
@@ -460,8 +455,9 @@ pub mod transform {
                             exp: Some(Operand::V(*sym)),
                             typ
                         });
-                        let pred = mp.get(sym).expect("Variable not defined.")
-                                 .iter().next().expect("Invalid Stat Run.");
+                        let pred = mp.get(sym)
+                            .expect(&format!("Variable {} not defined.", sm.uname(*sym)))
+                            .iter().next().expect("Invalid Stat Run.");
 
                         // This is implicit in SSA usually. We actually need it here though.
                         let last_element = nodes[*pred].content.pop_back();
@@ -507,28 +503,40 @@ pub mod transform {
                 }
             })
         }
-        for (name, typ) in decl {
+        
+        'top: for (name, tp) in decl {
+            for tree in nodes[0].content.iter_mut() {
+                match tree {
+                    Tree::LetP(PrimStatement { name: Some(n), typ, .. })
+                    if name == *n => { *typ = tp; continue 'top; },
+                    _ => ()
+                }
+            }
             nodes[0].content.push_front(Tree::LetP({
-                let lit = match typ {
-                    Typ::Unknown => panic!("Unknown type!"),
-                    Typ::Void => panic!("Void type!"),
-                    Typ::Bool => Literal::Bool(false),
-                    Typ::Char => Literal::Char('\0'),
-                    Typ::Byte => Literal::Byte(0),
-                    Typ::Int => Literal::Int(0),
-                    Typ::Short => Literal::Short(0),
-                    Typ::Long => Literal::Long(0),
-                    Typ::Float => Literal::Float(0.0),
-                    Typ::Double => Literal::Double(0.0),
-                    Typ::Str => Literal::Null,
-                    Typ::Array(_) => Literal::Null,
-                    Typ::Class(_) => Literal::Null
-                };
+                let lit = defaultLit(tp);
                 PrimStatement {
-                    name: Some(name), typ,
+                    name: Some(name), typ: tp,
                     exp: Some(Operand::C(lit))
                 }
             }));
+        }
+    }
+
+    fn defaultLit(typ: Typ) -> Literal {
+        match typ {
+            Typ::Unknown => panic!("Unknown type!"),
+            Typ::Void => panic!("Void type!"),
+            Typ::Bool => Literal::Bool(false),
+            Typ::Char => Literal::Char('\0'),
+            Typ::Byte => Literal::Byte(0),
+            Typ::Int => Literal::Int(0),
+            Typ::Short => Literal::Short(0),
+            Typ::Long => Literal::Long(0),
+            Typ::Float => Literal::Float(0.0),
+            Typ::Double => Literal::Double(0.0),
+            Typ::Str => Literal::Null,
+            Typ::Array(_) => Literal::Null,
+            Typ::Class(_) => Literal::Null
         }
     }
 }
@@ -723,6 +731,7 @@ mod test {
     use crate::ir::*;
     use crate::converter::convert;
     use crate::hoist::hoist;
+    use crate::optimizer::optimize;
     use crate::parameters::Parameters;
     use crate::printer::print;
     use crate::ssa::transform;
@@ -733,12 +742,21 @@ mod test {
     #[test]
     pub fn f() {
         let text = r#"
-        public class Test {
-            public static void main(String[] args) {
-                int a;
-                a = 1;
+        class Test {
+            public static void main(String[] args_2) {
+                int cnt = 0;
+                while (cnt++ < 50) {
+                    switch (cnt % 5) {
+                        case 0: do { cnt++; } while (cnt < 10);
+                        case 1: break;
+                        case 2: do { cnt++; } while (cnt < 1);;
+                        case 3: continue;
+                        case 4: cnt *= cnt;
+                    }
+                }
+                System.out.println(cnt);
             }
-        }
+          }
         "#;
 
         let mut parser = Parser::new();
@@ -750,8 +768,8 @@ mod test {
         let mut ast = convert(tree.root_node(), text.as_bytes(), &params, &mut sm);
         ast = hoist(ast.as_ref(), &mut sm);
         typeinfer(ast.as_mut(), &mut sm);
-
         ast = Box::new(super::transform::transform(*ast, &mut sm));
+        ast = optimize(ast.as_ref(), &mut sm);
         print(&ast, &sm);
         ast = Box::new(super::transform::revert(*ast, &mut sm));
         print(&ast, &sm);

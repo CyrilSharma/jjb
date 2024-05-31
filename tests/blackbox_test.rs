@@ -100,7 +100,6 @@ impl JavaFileManager {
 
     /// Reads the cached output if available.
     fn read_cache(&self, fname: &str) -> Result<String, std::io::Error> {
-        println!("I'm running!");
         let cache_path = format!("{}/.{}_cache", self.base_dir, fname);
         fs::read_to_string(cache_path)
     }
@@ -157,8 +156,8 @@ fn test(name: &str, source: &str, compile: &str) {
     ast = hoist(ast.as_ref(), &mut sm);
     typeinfer(ast.as_mut(), &mut sm);
     ast = Box::new(ssa::transform::transform(*ast, &mut sm));
+    ast = optimize(ast.as_ref(), &mut sm);
     ast = Box::new(ssa::transform::revert(*ast, &mut sm));
-    // ast = optimize(ast.as_ref(), &mut sm);
     test_equal(source, compile, &ast, &sm, name, &params);
 }
 
