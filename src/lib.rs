@@ -11,4 +11,5 @@ pub mod typeinfer;
 pub mod optimizer;
 pub mod parameters;
 pub mod ssa;
+pub mod graph;
 mod substitution;

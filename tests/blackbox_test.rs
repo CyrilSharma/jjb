@@ -155,9 +155,9 @@ fn test(name: &str, source: &str, compile: &str) {
     let mut ast = convert(tree.root_node(), compile.as_bytes(), &params, &mut sm);
     ast = hoist(ast.as_ref(), &mut sm);
     typeinfer(ast.as_mut(), &mut sm);
-    ast = Box::new(ssa::transform::transform(*ast, &mut sm));
+    ast = Box::new(ssa::transform(*ast, &mut sm));
     ast = optimize(ast.as_ref(), &mut sm);
-    ast = Box::new(ssa::transform::revert(*ast, &mut sm));
+    ast = Box::new(ssa::revert(*ast, &mut sm));
     test_equal(source, compile, &ast, &sm, name, &params);
 }
 

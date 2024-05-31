@@ -12,6 +12,8 @@ mod optimizer;
 mod substitution;
 mod parameters;
 mod ssa;
+mod flatten;
+mod graph;
 use typeinfer::typeinfer;
 use hoist::hoist;
 use converter::convert;
