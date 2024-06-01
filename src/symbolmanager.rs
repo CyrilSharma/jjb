@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use crate::ir::*;
 
-#[derive(Clone)]
-enum NameType {
+#[derive(Clone, Debug)]
+pub enum NameType {
     Reserved(String),
     Known(String)
 }
@@ -12,7 +12,7 @@ pub struct Symbol { pub id: usize }
 
 #[derive(Default)]
 pub struct SymbolManager {
-    names: Vec<NameType>,
+    pub names: Vec<NameType>,
     arraytypes: HashMap<Symbol, ArrayTyp>,
     // Perhaps these should just have names in their types.
     // Then, we wouldn't need HashMaps...

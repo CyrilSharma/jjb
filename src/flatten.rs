@@ -3,11 +3,12 @@ use std::collections::HashSet;
 use crate::graph::Allocator;
 use crate::graph::Id;
 use crate::optimizer;
+use crate::symbolmanager;
 use crate::{graph, ir::*};
 use crate::symbolmanager::{Symbol, SymbolManager};
 use std::hash::Hash;
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 struct Set<T: Eq + Hash + Clone> {
     inner: HashSet<T>
 }
@@ -80,7 +81,7 @@ pub fn flatten(tree: Tree, sm: &mut SymbolManager) -> Tree {
             // ... this is why we can't have nice things.
             let f = match t { Tree::LetF(f) => f, _ => panic!() };
             let (mut allocator, next_map) = graph::build(f.body);
-            flatten_graph(&mut allocator, census);
+            flatten_graph(&mut allocator, census, sm);
             FunDeclaration {
                 body: graph::fold(allocator, &next_map),
                 ..f
@@ -96,7 +97,7 @@ pub fn flatten(tree: Tree, sm: &mut SymbolManager) -> Tree {
     }
 }
 
-fn flatten_graph(alloc: &mut Allocator, census: HashMap<Symbol, usize>) {
+fn flatten_graph(alloc: &mut Allocator, census: HashMap<Symbol, usize>, sm: &mut SymbolManager) {
     fn dfs(node: Id, v: &mut Vec<Id>, alloc: &Allocator, visited: &mut Vec<bool>) {
         visited[node] = true;
         let cfg = alloc.grab(node);
@@ -119,7 +120,7 @@ fn flatten_graph(alloc: &mut Allocator, census: HashMap<Symbol, usize>) {
                     gen[id].insert(count);
                     idtosym.insert(count, n);
                     let entry = symtoids.entry(n).or_insert(Set::new());
-                    entry.insert(id);
+                    entry.insert(count);
                 },
                 Tree::Try(_) => todo!(),
                 _ => ()
@@ -128,16 +129,40 @@ fn flatten_graph(alloc: &mut Allocator, census: HashMap<Symbol, usize>) {
         }
     }
 
+    println!("idtosym =>");
+    for (id, &sym) in &idtosym {
+        println!("-> id: {}, sym: {}", id, sm.uname(sym));
+    }
 
-    // TODO: should defs be indexed by symbol as well?
-    // Think on it. Once we know all definitions that correspond to a symbol
+    println!();
+    
+    for (i, name) in sm.names.iter().enumerate() {
+        println!("{}: {:?}", i, name)
+    }
+
+    println!("symtoids =>");
+    for (&sym, id) in &symtoids {
+        println!("-> sym: {}", sm.uname(sym));
+        for item in id {
+            println!("---- item: {}", item);
+        }
+    }
+
+    println!("gen =>");
+    for (i, vec) in gen.iter().enumerate() {
+        println!("--> block {}", i);
+        for item in vec {
+            println!("----- item: {}", item);
+        }
+    }
+
     let mut postorder = Vec::new();
     postorder.reserve(alloc.len());
     dfs(0, &mut postorder, alloc, &mut vec![false; alloc.len()]);
     let mut defs = vec![Set::new(); alloc.len()];
     loop {
         let mut changed = false;
-        for &node in postorder.iter().rev().skip(1) {
+        for &node in postorder.iter().rev() {
             let preds = &alloc.grab(node).preds;
             let mut new_defs = Set::new();
             for &p in preds { new_defs.union(&defs[p]) }
@@ -154,6 +179,15 @@ fn flatten_graph(alloc: &mut Allocator, census: HashMap<Symbol, usize>) {
         if !changed { break }
     }
 
+    println!("defs =>");
+    for (i, vec) in defs.iter().enumerate() {
+        println!("--> block {}", i);
+        for item in vec {
+            println!("----- item: {}", item);
+        }
+    }
+
+
     let mut count = 0;
     let mut values = HashMap::new();
     for node in 0..alloc.len() {
@@ -164,29 +198,63 @@ fn flatten_graph(alloc: &mut Allocator, census: HashMap<Symbol, usize>) {
             entry.push(id);
         }
 
-        // This would be better if we could just remove the nodes that changed.
-        // But that's part of the unstable api...
+        println!("symtodefs =>");
+        for (&sym, id) in &symtodefs {
+            println!("-> sym: {}", sm.uname(sym));
+            for item in id {
+                println!("---- item: {}", item);
+            }
+        }
+
         let node = alloc.grab_mut(node);
-        let mut newcontent = TreeContainer::new();
-        for child in node.content.iter_mut() {
-            match child {
-                Tree::LetP(p) => 'body: {
-                    if let Some(e) = &mut p.exp { inline(e, &census, &values, &symtodefs) }
-                    if let Some(n) = &p.name {
-                        let cnt = *census.get(&n).unwrap_or(&0);
-                        if cnt <= 1 {
-                            p.exp.as_ref().map(|e| values.insert(count, e.clone()));
-                            break 'body;
+        let mut res = TreeContainer::new();
+        while let Some(mut item) = node.content.pop_front() {
+            match item {
+                Tree::LetP(ref mut p) => match (p.name, p.exp.as_mut()) {
+                    (None, None) => panic!("Invalid Primitive"),
+                    (None, Some(e)) => {
+                        inline(e, &census, &values, &symtodefs);
+                        res.push_back(item);
+                    },
+                    (Some(_), None) => res.push_back(item),
+                    (Some(n), Some(e)) => {
+                        if let Operand::T(ExprTree { op: Operation::Phi, .. }) = e {
+                            // inline(e, census, &values);
+                            res.push_back(item)
+                        } else if let Some(1) = census.get(&n) {
+                            inline(e, &census, &values, &symtodefs);
+                            values.insert(count, e.clone());
+                        } else {
+                            inline(e, &census, &values, &symtodefs);
+                            res.push_back(item)
                         }
-                    }
-                    newcontent.push_back(child.clone())
+                    },
+                },
+                Tree::Block(_) => res.push_back(item),
+                Tree::Switch(ref mut s) => {
+                    inline(&mut s.arg, &census, &values, &symtodefs);
+                    res.push_back(item)
                 }
+                Tree::Loop(ref mut l) => {
+                    inline(&mut l.cond, &census, &values, &symtodefs);
+                    res.push_back(item)
+                },
+                Tree::If(ref mut i) => {
+                    inline(&mut i.cond, &census, &values, &symtodefs);
+                    res.push_back(item)
+                },
+                Tree::Return(ref mut r) => {
+                    r.val.as_mut().map(|e| inline(e, &census, &values, &symtodefs));
+                    res.push_back(item)
+                },
+                Tree::Break(_) => res.push_back(item),
+                Tree::Continue(_) => res.push_back(item),
                 Tree::Try(_) => todo!(),
-                other => newcontent.push_back(other.clone())
+                other => res.push_back(other)
             }
             count += 1;
         }
-        node.content = newcontent;
+        node.content = res;
     }
 }
 
@@ -199,13 +267,25 @@ fn inline(
         Operand::This(_) | Operand::Super(_) |
         Operand::C(_) | Operand::Tp(_) => (),
         Operand::V(sym) => {
-            let defs = symtodefs.get(&sym).expect("Sym To Defs missing Symbol");
-            if defs.len() != 1 { return }
-            let cnt = *census.get(&sym).unwrap_or(&0);
-            if cnt > 1 { return }
-            *e = values.get(&defs[0]).expect("Values missing Symbol").clone()
+            let res = symtodefs.get(&sym);
+            if let Some(defs) = res {
+                if defs.len() != 1 { return }
+                let cnt = *census.get(&sym).unwrap_or(&0);
+                if cnt > 1 { return }
+                if let Some(v) = values.get(&defs[0]) {
+                    *e = v.clone();
+                }
+            }
         },
-        Operand::T(ExprTree { args, .. }) => args.iter_mut().for_each(|e| inline(e, census, values, symtodefs)),
+        Operand::T(ExprTree { args, op: Operation::New }) => {
+            args[1..].iter_mut().for_each(|e| inline(e, census, values, symtodefs))
+        }
+        Operand::T(ExprTree { args, op: Operation::InvokeVirtual | Operation::InvokeStatic }) => {
+            inline(&mut args[0], census, values, symtodefs);
+            args[2..].iter_mut().for_each(|e| inline(e, census, values, symtodefs))
+        },
+        Operand::T(ExprTree { args, .. }) => 
+            args.iter_mut().for_each(|e| inline(e, census, values, symtodefs)),
         Operand::A(a) => match a {
             ArrayExpression::Empty(v) => v.iter_mut().for_each(|e| inline(e, census, values, symtodefs)),
             ArrayExpression::Initializer(a) => inline_array(a, census, values, symtodefs)
@@ -223,5 +303,54 @@ fn inline_array(
             ElementInitializer::Expr(e) => inline(e, census, values, symtodefs),
             ElementInitializer::ArrayInitializer(child) => inline_array(child, census, values, symtodefs)
         }
+    }
+}
+
+
+#[cfg(test)]
+mod test {
+    use tree_sitter::Parser;
+    use crate::{ir::*, ssa};
+    use crate::converter::convert;
+    use crate::hoist::hoist;
+    use crate::optimizer::optimize;
+    use crate::parameters::Parameters;
+    use crate::printer::print;
+    use crate::ssa::transform;
+    use crate::symbolmanager::SymbolManager;
+    use crate::typeinfer::typeinfer;
+    use crate::graph::print_graph;
+
+    #[test]
+    pub fn f() {
+        let text = r#"
+        class Test {
+            public static void main(String[] args_2) {
+                int i = 10;
+                if (i < 12) {
+                    System.out.println("CORRECT");
+                } else {
+                    System.out.println("INCORRECT");
+                }
+            }
+          }
+        "#;
+
+        let mut parser = Parser::new();
+        parser.set_language(&tree_sitter_java::language()).expect("Error loading Java grammar");
+        let tree = parser.parse(text, None).unwrap();
+        let mut sm = SymbolManager::new();
+        let class_name = "Test".to_string();
+        let params = Parameters { entry_class: class_name, entry_name: "main".to_string() };
+        let mut ast = convert(tree.root_node(), text.as_bytes(), &params, &mut sm);
+        ast = hoist(ast.as_ref(), &mut sm);
+        typeinfer(ast.as_mut(), &mut sm);
+        ast = Box::new(ssa::transform(*ast, &mut sm));
+        ast = optimize(ast.as_ref(), &mut sm);
+        ast = Box::new(ssa::revert(*ast, &mut sm));
+        print(&ast, &sm);
+        ast = Box::new(super::flatten(*ast, &mut sm));
+        print(&ast, &sm);
+        // assert!(false)
     }
 }
