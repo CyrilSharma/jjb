@@ -241,6 +241,20 @@ method_test!(prim_arith, r#"
     );
 "#);
 
+method_test!(prim_arith_simple, r#"
+    int a=1, b=-2, c=3, d=-4, e=5;
+    for (int it = 0; it < 10; it++) {
+        a = b + c;
+        b = c - d;
+        c = d * e;
+        d = e / 3;
+    }
+    System.out.printf(
+        "%d %d %d %d\n",
+        a, b, c, d
+    );
+"#);
+
 method_test!(prim_incr, r#"
     int a=1, b=-2, c=3, d=-4, e=5, f=-6, g=7, h=-8;
     for (int it = 0; it < 10; it++) {
@@ -252,6 +266,17 @@ method_test!(prim_incr, r#"
     System.out.printf(
         "%d %d %d %d %d %d %d %d\n",
         a, b, c, d, e, f, g, h
+    );
+"#);
+
+method_test!(prim_modifying_basic, r#"
+    int a=1, b=-2, c=3;
+    for (int it = 0; it < 10; it++) {
+        a += b;
+        b -= c;
+    }
+    System.out.printf(
+        "%d %d %d\n", a, b, c
     );
 "#);
 

@@ -78,7 +78,6 @@ pub fn flatten(tree: Tree, sm: &mut SymbolManager) -> Tree {
         Tree::LetF(f) => Tree::LetF({
             let t = Tree::LetF(f);
             let census = optimizer::census::census(&t);
-            // ... this is why we can't have nice things.
             let f = match t { Tree::LetF(f) => f, _ => panic!() };
             let (mut allocator, next_map) = graph::build(f.body);
             flatten_graph(&mut allocator, census, sm);
@@ -97,7 +96,7 @@ pub fn flatten(tree: Tree, sm: &mut SymbolManager) -> Tree {
     }
 }
 
-fn flatten_graph(alloc: &mut Allocator, census: HashMap<Symbol, usize>, sm: &mut SymbolManager) {
+fn flatten_graph(alloc: &mut Allocator, mut census: HashMap<Symbol, usize>, sm: &mut SymbolManager) {
     fn dfs(node: Id, v: &mut Vec<Id>, alloc: &Allocator, visited: &mut Vec<bool>) {
         visited[node] = true;
         let cfg = alloc.grab(node);
@@ -129,33 +128,6 @@ fn flatten_graph(alloc: &mut Allocator, census: HashMap<Symbol, usize>, sm: &mut
         }
     }
 
-    println!("idtosym =>");
-    for (id, &sym) in &idtosym {
-        println!("-> id: {}, sym: {}", id, sm.uname(sym));
-    }
-
-    println!();
-    
-    for (i, name) in sm.names.iter().enumerate() {
-        println!("{}: {:?}", i, name)
-    }
-
-    println!("symtoids =>");
-    for (&sym, id) in &symtoids {
-        println!("-> sym: {}", sm.uname(sym));
-        for item in id {
-            println!("---- item: {}", item);
-        }
-    }
-
-    println!("gen =>");
-    for (i, vec) in gen.iter().enumerate() {
-        println!("--> block {}", i);
-        for item in vec {
-            println!("----- item: {}", item);
-        }
-    }
-
     let mut postorder = Vec::new();
     postorder.reserve(alloc.len());
     dfs(0, &mut postorder, alloc, &mut vec![false; alloc.len()]);
@@ -179,88 +151,103 @@ fn flatten_graph(alloc: &mut Allocator, census: HashMap<Symbol, usize>, sm: &mut
         if !changed { break }
     }
 
-    println!("defs =>");
-    for (i, vec) in defs.iter().enumerate() {
-        println!("--> block {}", i);
-        for item in vec {
-            println!("----- item: {}", item);
-        }
-    }
+    graph::print_graph(&alloc.nodes, sm);
+    // println!("defs =>");
+    // for (i, vec) in defs.iter().enumerate() {
+    //     println!("--> block {}", i);
+    //     for item in vec {
+    //         println!("----- item: {}", item);
+    //     }
+    // }
 
-
-    let mut count = 0;
-    let mut values = HashMap::new();
-    for node in 0..alloc.len() {
-        let mut symtodefs = HashMap::new();
-        for &id in &defs[node] {
-            let sym = idtosym[&id];
-            let entry = symtodefs.entry(sym).or_insert(vec![]);
-            entry.push(id);
-        }
-
-        println!("symtodefs =>");
-        for (&sym, id) in &symtodefs {
-            println!("-> sym: {}", sm.uname(sym));
-            for item in id {
-                println!("---- item: {}", item);
+    for iter in 0..4 {
+        let mut count = 0;
+        let mut values = HashMap::new();
+        for node in 0..alloc.len() {
+            let mut predset = Set::new();
+            let mut symtodefs = HashMap::new();
+            for &pred in &alloc.grab(node).preds {
+                predset.union(&defs[pred]);
             }
-        }
 
-        let node = alloc.grab_mut(node);
-        let mut res = TreeContainer::new();
-        while let Some(mut item) = node.content.pop_front() {
-            match item {
-                Tree::LetP(ref mut p) => match (p.name, p.exp.as_mut()) {
-                    (None, None) => panic!("Invalid Primitive"),
-                    (None, Some(e)) => {
-                        inline(e, &census, &values, &symtodefs);
-                        res.push_back(item);
-                    },
-                    (Some(_), None) => res.push_back(item),
-                    (Some(n), Some(e)) => {
-                        if let Operand::T(ExprTree { op: Operation::Phi, .. }) = e {
-                            // inline(e, census, &values);
-                            res.push_back(item)
-                        } else if let Some(1) = census.get(&n) {
-                            inline(e, &census, &values, &symtodefs);
-                            values.insert(count, e.clone());
-                        } else {
-                            inline(e, &census, &values, &symtodefs);
-                            res.push_back(item)
-                        }
-                    },
-                },
-                Tree::Block(_) => res.push_back(item),
-                Tree::Switch(ref mut s) => {
-                    inline(&mut s.arg, &census, &values, &symtodefs);
-                    res.push_back(item)
+            for &id in &predset {
+                let sym = idtosym[&id];
+                let entry = symtodefs.entry(sym).or_insert(vec![]);
+                entry.push(id);
+            }
+
+            if iter == 0 {
+                println!("symtodefs {} =>", node);
+                for (&sym, id) in &symtodefs {
+                    println!("-> sym: {}", sm.uname(sym));
+                    for item in id {
+                        println!("---- item: {}", item);
+                    }
                 }
-                Tree::Loop(ref mut l) => {
-                    inline(&mut l.cond, &census, &values, &symtodefs);
-                    res.push_back(item)
-                },
-                Tree::If(ref mut i) => {
-                    inline(&mut i.cond, &census, &values, &symtodefs);
-                    res.push_back(item)
-                },
-                Tree::Return(ref mut r) => {
-                    r.val.as_mut().map(|e| inline(e, &census, &values, &symtodefs));
-                    res.push_back(item)
-                },
-                Tree::Break(_) => res.push_back(item),
-                Tree::Continue(_) => res.push_back(item),
-                Tree::Try(_) => todo!(),
-                other => res.push_back(other)
             }
-            count += 1;
+
+            let node = alloc.grab_mut(node);
+            let mut res = TreeContainer::new();
+            while let Some(mut item) = node.content.pop_front() {
+                match item {
+                    Tree::LetP(ref mut p) => match (p.name, p.exp.as_mut()) {
+                        (None, None) => panic!("Invalid Primitive"),
+                        (None, Some(e)) => {
+                            inline(e, &mut census, &values, &symtodefs);
+                            res.push_back(item);
+                        },
+                        (Some(n), None) => {
+                            symtodefs.remove(&n);
+                            symtodefs.insert(n, vec![count]);
+                            res.push_back(item)
+                        },
+                        (Some(n), Some(e)) => {
+                            symtodefs.remove(&n);
+                            symtodefs.insert(n, vec![count]);
+                            if let Some(1) = census.get(&n) {
+                                inline(e, &mut census, &values, &symtodefs);
+                                values.insert(count, e.clone());
+                                res.push_back(item)
+                            } else if let Some(0) = census.get(&n) {
+                                
+                            } else {
+                                inline(e, &mut census, &values, &symtodefs);
+                                res.push_back(item)
+                            }
+                        },
+                    },
+                    Tree::Block(_) => res.push_back(item),
+                    Tree::Switch(ref mut s) => {
+                        inline(&mut s.arg, &mut census, &values, &symtodefs);
+                        res.push_back(item)
+                    }
+                    Tree::Loop(ref mut l) => {
+                        inline(&mut l.cond, &mut census, &values, &symtodefs);
+                        res.push_back(item)
+                    },
+                    Tree::If(ref mut i) => {
+                        inline(&mut i.cond, &mut census, &values, &symtodefs);
+                        res.push_back(item)
+                    },
+                    Tree::Return(ref mut r) => {
+                        r.val.as_mut().map(|e| inline(e, &mut census, &values, &symtodefs));
+                        res.push_back(item)
+                    },
+                    Tree::Break(_) => res.push_back(item),
+                    Tree::Continue(_) => res.push_back(item),
+                    Tree::Try(_) => todo!(),
+                    other => res.push_back(other)
+                }
+                count += 1;
+            }
+            node.content = res;
         }
-        node.content = res;
     }
 }
 
 fn inline(
     e: &mut Operand,
-    census: &HashMap<Symbol, usize>,
+    census: &mut HashMap<Symbol, usize>,
     values: &HashMap<Id, Operand>,
     symtodefs: &HashMap<Symbol, Vec<Id>>) {
     match e {
@@ -273,6 +260,9 @@ fn inline(
                 let cnt = *census.get(&sym).unwrap_or(&0);
                 if cnt > 1 { return }
                 if let Some(v) = values.get(&defs[0]) {
+                    if let Some(el) = census.get_mut(&sym) {
+                        *el -= 1;
+                    }
                     *e = v.clone();
                 }
             }
@@ -295,7 +285,7 @@ fn inline(
 
 fn inline_array(
     a: &mut ArrayInitializer,
-    census: &HashMap<Symbol, usize>,
+    census: &mut HashMap<Symbol, usize>,
     values: &HashMap<Id, Operand>,
     symtodefs: &HashMap<Symbol, Vec<Id>>) {
     for item in a {
@@ -326,12 +316,14 @@ mod test {
         let text = r#"
         class Test {
             public static void main(String[] args_2) {
-                int i = 10;
-                if (i < 12) {
-                    System.out.println("CORRECT");
-                } else {
-                    System.out.println("INCORRECT");
+                int a=1, b=-2, c=3;
+                for (int it = 0; it < 10; it++) {
+                    a += b;
+                    b -= c;
                 }
+                System.out.printf(
+                    "%d %d %d\n", a, b, c
+                );
             }
           }
         "#;
@@ -351,6 +343,6 @@ mod test {
         print(&ast, &sm);
         ast = Box::new(super::flatten(*ast, &mut sm));
         print(&ast, &sm);
-        // assert!(false)
+        assert!(false)
     }
 }

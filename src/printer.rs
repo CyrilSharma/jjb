@@ -245,7 +245,7 @@ fn serialize_op(op: &Operand, state: &mut PrintState<'_, impl Write>) -> String 
                     serialize_op(&args[0], state),
                     serialize_op(&args[1], state)
                 ),
-                Index if args.len() == 2 => format!("{}[{}]",
+                Index if args.len() == 2 => format!("({})[{}]",
                     serialize_op(&args[0], state),
                     serialize_op(&args[1], state)
                 ),
