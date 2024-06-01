@@ -1,6 +1,6 @@
 use std::{collections::LinkedList, ops::Add};
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Container<T> {
     container: LinkedList<T>
 }
@@ -59,6 +59,13 @@ impl<T> Container<T> {
             }
         }
         self.container = new_container;
+    }
+}
+
+// Explicit Default implementation
+impl<T> Default for Container<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

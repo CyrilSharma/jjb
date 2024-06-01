@@ -109,6 +109,8 @@ pub fn optimize(tree: &Tree, sm: &mut SymbolManager) -> Box<Tree> {
 }
 
 pub mod shrink {
+    use std::collections::HashSet;
+
     use crate::ir::*;
     use crate::symbolmanager::{SymbolManager, Symbol};
     use super::census;
@@ -124,7 +126,10 @@ pub mod shrink {
         // Doing all the functions in parallel.
         Box::new({
             let mut cur = root;
-            for _ in 0..20 { cur = Tree::Program(traverse(cur, &mut state)) }
+            for _ in 0..20 {
+                cur = Tree::Program(traverse(cur, &mut state));
+                state.census = census::census(&cur);
+            }
             cur
         })
     }
@@ -231,11 +236,20 @@ pub mod shrink {
             },
             Tree::LetP(PrimStatement { exp: Some(Op::T(ExprTree { op: Phi, args })), name: Some(name), typ }) => {
                 if state.dead(name) { return TreeContainer::new() }
+                let mut processed = HashSet::new();
+                processed.insert(name);
                 let mut nargs = vec![args[0].clone()];
                 for i in 1..args.len() {
-                    let op = args[i].clone();
-                    let sub = substop(op, state);
-                    nargs.push(sub);
+                    match args[i] {
+                        Op::V(sym) => {
+                            let nsym = state.subst(sym);
+                            if !processed.contains(&nsym) {
+                                nargs.push(Operand::V(nsym));
+                                processed.insert(nsym);
+                            }
+                        }
+                        _ => panic!("Invalid Phi Node!")
+                    }
                 }
                 if nargs.len() == 1 { return TreeContainer::new() }
                 if nargs.len() == 2 { return TreeContainer::make(Tree::LetP(PrimStatement
