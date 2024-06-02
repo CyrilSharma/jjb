@@ -363,11 +363,7 @@ pub fn revert(tree: Tree, sm: &mut SymbolManager) -> Tree {
 
 // TODO a "redefine" phase, so we have declarations in the proper places.
 pub fn to_cssa(alloc: &mut Allocator, sm: &mut SymbolManager) {
-    fn insert_copy(
-        pred: usize,
-        assign: Tree,
-        nodes: &mut Vec<CfgNode>,
-    ) {
+    fn insert_copy(pred: usize, assign: Tree, nodes: &mut Vec<CfgNode>) {
         if let Some(last_element) = nodes[pred].content.pop_back() {
             let insert_back = match &last_element {
                 Tree::Switch(_) | Tree::If(_) | Tree::Loop(_) |
@@ -393,7 +389,7 @@ pub fn to_cssa(alloc: &mut Allocator, sm: &mut SymbolManager) {
         mp: &HashMap<Symbol, HashSet<Id>>,
         nodes: &mut Vec<CfgNode>,
         sm: &mut SymbolManager
-    ) -> (Tree, Tree) {
+    ) -> (Tree, Vec<Operand>) {
         let (name, typ, ops) = match el {
             Tree::LetP(PrimStatement {
                 exp: Some(Operand::T(ExprTree { op: Operation::Phi, args })),
@@ -424,19 +420,14 @@ pub fn to_cssa(alloc: &mut Allocator, sm: &mut SymbolManager) {
             name: Some(assign_name),
             typ,
         });
-        let res_assign = Tree::LetP(PrimStatement {
-            exp: Some(Operand::V(assign_name)),
-            name: Some(name),
-            typ,
-        });
-        (res_phi, res_assign)
+        (res_phi, vec![Operand::V(name), Operand::V(assign_name), Operand::Tp(typ)])
     }
 
     let (mp, _) = stat(alloc);
     let nodes = &mut alloc.nodes;
     for id in 0..nodes.len() {
         let mut phis = TreeContainer::new();
-        let mut assigns = TreeContainer::new();
+        let mut pcopy_args = Vec::new();
         while let Some(cur) = nodes[id].content.pop_front() {
             if let Tree::LetP(PrimStatement {
                 exp: Some(Operand::T(ExprTree { op: Operation::Phi, .. })),
@@ -444,11 +435,20 @@ pub fn to_cssa(alloc: &mut Allocator, sm: &mut SymbolManager) {
             }) = cur {
                 let (phi, assign) = process_phi(cur, &mp, nodes, sm);
                 phis.push_back(phi);
-                assigns.push_back(assign);
+                pcopy_args.extend(assign);
             } else {
                 nodes[id].content.push_front(cur);
                 let content = std::mem::take(&mut nodes[id].content);
-                nodes[id].content = phis + assigns + content;
+                let assign = Tree::LetP(PrimStatement {
+                    name: None,
+                    typ: Typ::Void,
+                    exp: Some(Operand::T(ExprTree {
+                        op: Operation::Pcopy,
+                        args: pcopy_args
+                    }))
+                });
+                phis.push_back(assign);
+                nodes[id].content = phis + content;
                 break;
             }
         }
@@ -456,7 +456,83 @@ pub fn to_cssa(alloc: &mut Allocator, sm: &mut SymbolManager) {
 }
 
 pub fn coalesce_cssa(alloc: &mut Allocator, sm: &mut SymbolManager) {
-    todo!();
+    let mut subst = Substitution::new();
+    let mut interference = HashMap::new();
+    let live = liveout(alloc, sm);
+    let nodes = &mut alloc.nodes;
+    for id in 0..nodes.len() {
+        let mut cur = live[id].clone();
+        for item in nodes[id].content.iter().rev() {
+            match item {
+                Tree::LetP(ref p) => match &p.exp {
+                    Some(e) => useop(&e, &mut cur, sm),
+                    None => ()
+                },
+                _ => ()
+            }
+        }
+        for sym1 in cur {
+            for sym2 in cur {
+                if sym1 == sym2 { continue }
+                let entry = interference.entry(sym1).or_insert(HashSet::new());
+                entry.insert(sym2);
+            }
+        }
+    }
+
+    // I'll implement fixed point iteration one day
+    for iter in 0..10 {
+        for id in 0..nodes.len() {
+            let mut res = TreeContainer::new();
+            while let Some(item) = nodes[id].content.pop_front() {
+                match item {
+                    Tree::LetP(p) => match (p.name, p.exp) {
+                        (Some(n), None) => {
+                            let nn = subst.subst(n);
+                            res.push_back(Tree::LetP(PrimStatement {
+                                name: Some(nn),
+                                typ: p.typ,
+                                exp: None
+                            }));
+                        },
+                        (Some(n), Some(mut e)) => {
+                            let nn = subst.subst(n);
+                            substop(&mut e, &subst);
+                            if let Operand::V(sym) = e {
+                                if !interference[&nn].contains(&sym) {
+                                    for item in std::mem::take(interference.get_mut(&sym).expect("")) {
+                                        let entry = interference.entry(nn).or_insert(HashSet::new());
+                                        entry.insert(item);
+                                    }
+                                    subst.add_subst(nn, sym);
+                                    continue;
+                                }
+                            }
+                            res.push_back(Tree::LetP(PrimStatement {
+                                name: Some(nn),
+                                typ: p.typ,
+                                exp: Some(e)
+                            }));
+                        }
+                        (None, Some(mut e)) => {
+                            substop(&mut e, &subst);
+                            res.push_back(Tree::LetP(PrimStatement {
+                                name: None,
+                                typ: p.typ,
+                                exp: Some(e)
+                            }));
+                        }
+                        (None, None) => panic!("Invalid Primitive")
+                    },
+                    mut other => res.push_back({
+                        substtree(&mut other, &mut subst);
+                        other
+                    })
+                }
+            }
+            nodes[id].content = res;
+        }
+    }
 }
 
 pub fn out_of_cssa(alloc: &mut Allocator, sm: &SymbolManager) {
@@ -483,7 +559,25 @@ pub fn out_of_cssa(alloc: &mut Allocator, sm: &SymbolManager) {
             if let Tree::LetP(PrimStatement {
                 exp: Some(Operand::T(ExprTree { op: Operation::Phi, .. })),
                 ..
-            }) = cur {} else {
+            }) = cur {}
+            else if let Tree::LetP(PrimStatement {
+                exp: Some(Operand::T(ExprTree { op: Operation::Pcopy, args })),
+                ..
+            }) = cur {
+                // To be replaced by the actual pcopy routine.
+                let mut i = 0;
+                while i < args.len() {
+                    let (name, exp, typ) = match (args[i].clone(), args[i+1].clone(), args[i+2].clone()) {
+                        (Operand::V(n), e, Operand::Tp(t)) => (n, e, t),
+                        _ => panic!("")
+                    };
+                    let stmt = Tree::LetP(PrimStatement {
+                        name: Some(name), typ, exp: Some(exp)
+                    });
+                    res.push_back(stmt);
+                    i += 3;
+                }
+            } else {
                 substtree(&mut cur, &mut subst);
                 res.push_back(cur);
             }

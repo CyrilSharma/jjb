@@ -235,6 +235,19 @@ fn serialize_op(op: &Operand, state: &mut PrintState<'_, impl Write>) -> String 
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
+                Pcopy => format!("Pcopy({})", {
+                    let mut res = String::new();
+                    let mut i = 0;
+                    while i < args.len() {
+                        res.push_str(&format!("{} {}, ",
+                            serialize_op(&args[i], state),
+                            serialize_op(&args[i+1], state)));
+                        i += 3;
+                    }
+                    if res.len() > 2 { res.pop(); res.pop(); }
+                    res.push_str(")");
+                    res
+                }),
                 Phi => format!("Phi({})",
                     args.iter()
                         .map(|arg| serialize_op(arg, state))
@@ -327,6 +340,7 @@ fn serialize_operator(operator: Operation) -> &'static str {
         Throw => "throw",
 
         Phi => "phi",
+        Pcopy => "pcopy",
 
         Ternary => "ternary",
         Access => "access",

@@ -152,6 +152,7 @@ pub enum Operation {
     InvokeVirtual,
     InvokeStatic,
     Phi,
+    Pcopy,
     Assert,
     Access,
     Index,

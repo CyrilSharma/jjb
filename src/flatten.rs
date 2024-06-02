@@ -118,6 +118,7 @@ fn inline(
                 *e = v.clone();
             }
         },
+        Operand::T(ExprTree { args, op: Operation::Pcopy }) => (),
         Operand::T(ExprTree { args, op: Operation::New }) => {
             args[1..].iter_mut().for_each(|e| inline(e, census, values))
         }

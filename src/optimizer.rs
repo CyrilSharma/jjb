@@ -329,7 +329,8 @@ pub mod shrink {
             },
             Tree::Break(label) => {
                 if let Some(cont) = state.l_env.get(&label).cloned() {
-                    traverselist(cont.clone(), state)
+                    if cont.len() > 0 { traverselist(cont.clone(), state) }
+                    else { TreeContainer::make(Tree::Break(label)) }
                 } else {
                     TreeContainer::make(Tree::Break(label))
                 }

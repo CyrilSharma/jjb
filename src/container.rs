@@ -2,7 +2,7 @@ use std::{collections::LinkedList, ops::Add};
 
 #[derive(Clone)]
 pub struct Container<T> {
-    container: LinkedList<T>
+    pub container: LinkedList<T>
 }
 
 // This was supposed to be done so I could swap out the underlying container,

@@ -156,8 +156,8 @@ fn test(name: &str, source: &str, compile: &str) {
     ast = hoist(ast.as_ref(), &mut sm);
     typeinfer(ast.as_mut(), &mut sm);
     ast = Box::new(ssa::transform(*ast, &mut sm));
-    ast = optimize(ast.as_ref(), &mut sm);
-    ast = Box::new(flatten::flatten(*ast, &mut sm));
+    // ast = optimize(ast.as_ref(), &mut sm);
+    // ast = Box::new(flatten::flatten(*ast, &mut sm));
     ast = Box::new(ssa::revert(*ast, &mut sm));
     test_equal(source, compile, &ast, &sm, name, &params);
 }
