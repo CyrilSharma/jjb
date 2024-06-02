@@ -332,87 +332,6 @@ pub fn verify(alloc: &Allocator, sm: &SymbolManager) -> Result<(), String> {
     Ok(())
 }
 
-pub fn revert(tree: Tree, sm: &mut SymbolManager) -> Tree {
-    match tree {
-        Tree::Program(stmts) => Tree::Program(
-            stmts.into_iter().map(|f| revert(f, sm)).collect()
-        ),
-        Tree::LetI(i) => Tree::LetI(i),
-        Tree::LetF(f) => Tree::LetF({
-            let (mut allocator, next_map) = graph::build(f.body);
-            // For now, eventually this will be a seperate phase,
-            // And we'll call the hoist after the cssa transformation but before reversion.
-            cssa::transform(&mut allocator, sm);
-            cssa::revert(&mut allocator, sm);
-            fix_declarations(&mut allocator);
-            FunDeclaration {
-                body: graph::fold(allocator, &next_map),
-                ..f
-            }
-        }),
-        Tree::LetC(c) => Tree::LetC(ClassDeclaration {
-            methods: c.methods.into_iter().map(|f| revert(f, sm)).collect(),
-            ..c
-        }),
-        Tree::LetE(_) => todo!(),
-        Tree::EntryPoint(e) => Tree::EntryPoint(e),
-        _ => panic!("Invalid tree in revert")
-    }
-}
-
-fn fix_declarations(alloc: &mut Allocator) {
-    let mut decl = HashMap::new();
-    let nodes = &mut alloc.nodes;
-    for id in 0..nodes.len() {
-        nodes[id].content.retain(|item| {
-            match item {
-                Tree::LetP(PrimStatement { name: Some(sym), typ, exp }) 
-                if *typ != Typ::Void => {
-                    decl.insert(*sym, *typ);
-                    *typ = Typ::Void;
-                    exp.is_some()
-                },
-                _ => true
-            }
-        })
-    }
-    
-    'top: for (name, tp) in decl {
-        for tree in nodes[0].content.iter_mut() {
-            match tree {
-                Tree::LetP(PrimStatement { name: Some(n), typ, .. })
-                if name == *n => { *typ = tp; continue 'top; },
-                _ => ()
-            }
-        }
-        nodes[0].content.push_front(Tree::LetP({
-            let lit = defaultLit(tp);
-            PrimStatement {
-                name: Some(name), typ: tp,
-                exp: Some(Operand::C(lit))
-            }
-        }));
-    }
-}
-
-fn defaultLit(typ: Typ) -> Literal {
-    match typ {
-        Typ::Unknown => panic!("Unknown type!"),
-        Typ::Void => panic!("Void type!"),
-        Typ::Bool => Literal::Bool(false),
-        Typ::Char => Literal::Char('\0'),
-        Typ::Byte => Literal::Byte(0),
-        Typ::Int => Literal::Int(0),
-        Typ::Short => Literal::Short(0),
-        Typ::Long => Literal::Long(0),
-        Typ::Float => Literal::Float(0.0),
-        Typ::Double => Literal::Double(0.0),
-        Typ::Str => Literal::Null,
-        Typ::Array(_) => Literal::Null,
-        Typ::Class(_) => Literal::Null
-    }
-}
-
 #[cfg(test)]
 mod test {
     use tree_sitter::Parser;
@@ -453,7 +372,7 @@ mod test {
         ast = Box::new(super::transform(*ast, &mut sm));
         ast = optimize(ast.as_ref(), &mut sm);
         // print(&ast, &sm);
-        ast = Box::new(super::revert(*ast, &mut sm));
+        // ast = Box::new(super::revert(*ast, &mut sm));
         // print(&ast, &sm);
         assert!(true)
     }

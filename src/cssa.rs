@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use crate::flatten;
+use crate::graph;
 use crate::ir::*;
 use crate::graph::*;
 use crate::substitution::Substitution;
@@ -82,15 +84,17 @@ pub fn transform(alloc: &mut Allocator, sm: &mut SymbolManager) {
             } else {
                 nodes[id].content.push_front(cur);
                 let content = std::mem::take(&mut nodes[id].content);
-                let assign = Tree::LetP(PrimStatement {
-                    name: None,
-                    typ: Typ::Void,
-                    exp: Some(Operand::T(ExprTree {
-                        op: Operation::Pcopy,
-                        args: pcopy_args
-                    }))
-                });
-                phis.push_back(assign);
+                if pcopy_args.len() > 0 {
+                    let assign = Tree::LetP(PrimStatement {
+                        name: None,
+                        typ: Typ::Void,
+                        exp: Some(Operand::T(ExprTree {
+                            op: Operation::Pcopy,
+                            args: pcopy_args
+                        }))
+                    });
+                    phis.push_back(assign);
+                }
                 nodes[id].content = phis + content;
                 break;
             }
@@ -100,6 +104,7 @@ pub fn transform(alloc: &mut Allocator, sm: &mut SymbolManager) {
 
 pub fn coalesce(alloc: &mut Allocator, sm: &mut SymbolManager) {
     let mut interference = interference(alloc, sm);
+    print_interference(&interference, sm);
     let nodes = &mut alloc.nodes;
     let mut subst = Substitution::new();
     // I'll implement fixed point iteration one day
@@ -132,52 +137,33 @@ pub fn coalesce(alloc: &mut Allocator, sm: &mut SymbolManager) {
     }
 
     fn coalesce_prim(
-        p: PrimStatement,
+        mut p: PrimStatement,
         subst: &mut Substitution<Symbol>,
         interference: &mut HashMap<Symbol, HashSet<Symbol>>
     ) -> Option<Tree> {
-        match (p.name, p.exp) {
-            (Some(n), None) => {
-                let nn = subst.subst(n);
-                Some(Tree::LetP(PrimStatement {
-                    name: Some(nn),
-                    typ: p.typ,
-                    exp: None
-                }))
-            },
-            (Some(n), Some(mut e)) => {
-                let nn = subst.subst(n);
-                substop(&mut e, &subst);
-                if let Operand::V(sym) = e {
-                    if !interference[&nn].contains(&sym) {
-                        for item in std::mem::take(interference.get_mut(&sym).expect("")) {
-                            let entry = interference.entry(nn).or_insert(HashSet::new());
-                            entry.insert(item);
-                        }
-                        subst.add_subst(nn, sym);
-                        return None;
-                    }
+        let nn = p.name.map(|n| subst.subst(n));
+        p.exp.as_mut().map(|n| substop(n, subst));
+        if let (Some(n), Some(Operand::V(sym))) = (&p.name, &p.exp) {
+            let nn = nn.unwrap();
+            if !interference[&nn].contains(&sym) {
+                for item in std::mem::take(interference.get_mut(&sym).expect("")) {
+                    let entry = interference.entry(nn).or_insert(HashSet::new());
+                    entry.insert(item);
                 }
-                return Some(Tree::LetP(PrimStatement {
-                    name: Some(nn),
-                    typ: p.typ,
-                    exp: Some(e)
-                }))
+                subst.add_subst(nn, *sym);
+                println!("I coalesced something!");
+                return None;
             }
-            (None, Some(mut e)) => {
-                substop(&mut e, &subst);
-                Some(Tree::LetP(PrimStatement {
-                    name: None,
-                    typ: p.typ,
-                    exp: Some(e)
-                }))
-            }
-            (None, None) => panic!("Invalid Primitive")
         }
+        return Some(Tree::LetP(PrimStatement {
+            name: nn,
+            typ: p.typ,
+            exp: p.exp
+        }));
     }
 }
 
-pub fn interference(alloc: &mut Allocator, sm: &mut SymbolManager) -> HashMap<Symbol, HashSet<Symbol>> {
+fn interference(alloc: &mut Allocator, sm: &mut SymbolManager) -> HashMap<Symbol, HashSet<Symbol>> {
     let mut interference = HashMap::new();
     let live = liveout(alloc, sm);
     let nodes = &mut alloc.nodes;
@@ -203,7 +189,87 @@ pub fn interference(alloc: &mut Allocator, sm: &mut SymbolManager) -> HashMap<Sy
     interference
 }
 
-pub fn revert(alloc: &mut Allocator, sm: &SymbolManager) {
+#[allow(unused)]
+fn print_interference(interference: &HashMap<Symbol, HashSet<Symbol>>, sm: &SymbolManager) {
+    println!("digraph G {{");
+    println!(r#"  node [shape=box, fontname="Helvetica", fontsize=12, ordering="out"]"#);
+    for (&sym, edges) in interference {
+        println!(r#"{} [label=<
+    <table border="0" cellborder="0" cellspacing="0">
+      <tr><td> {} </td></tr>   
+    </table>
+  >]"#, sm.uname(sym), sm.uname(sym));
+        for (i, &nbr) in edges.iter().enumerate() {
+            println!("  {} -> {}", sm.uname(sym), sm.uname(nbr));
+        }
+    }
+    println!("}}");
+}
+
+pub fn revert(tree: Tree, sm: &mut SymbolManager) -> Tree {
+    match tree {
+        Tree::Program(stmts) => Tree::Program(
+            stmts.into_iter().map(|f| revert(f, sm)).collect()
+        ),
+        Tree::LetI(i) => Tree::LetI(i),
+        Tree::LetF(f) => Tree::LetF({
+            let (mut allocator, next_map) = graph::build(f.body);
+            transform(&mut allocator, sm);
+            print_graph(&allocator.nodes, sm);
+            coalesce(&mut allocator, sm);
+            revert_graph(&mut allocator, sm);
+            fix_declarations(&mut allocator);
+            FunDeclaration {
+                body: graph::fold(allocator, &next_map),
+                ..f
+            }
+        }),
+        Tree::LetC(c) => Tree::LetC(ClassDeclaration {
+            methods: c.methods.into_iter().map(|f| revert(f, sm)).collect(),
+            ..c
+        }),
+        Tree::LetE(_) => todo!(),
+        Tree::EntryPoint(e) => Tree::EntryPoint(e),
+        _ => panic!("Invalid tree in revert")
+    }
+}
+
+fn fix_declarations(alloc: &mut Allocator) {
+    let mut decl = HashMap::new();
+    let nodes = &mut alloc.nodes;
+    for id in 0..nodes.len() {
+        nodes[id].content.retain(|item| {
+            match item {
+                Tree::LetP(PrimStatement { name: Some(sym), typ, exp }) 
+                if *typ != Typ::Void => {
+                    decl.insert(*sym, *typ);
+                    *typ = Typ::Void;
+                    exp.is_some()
+                },
+                _ => true
+            }
+        })
+    }
+    
+    'top: for (name, tp) in decl {
+        for tree in nodes[0].content.iter_mut() {
+            match tree {
+                Tree::LetP(PrimStatement { name: Some(n), typ, .. })
+                if name == *n => { *typ = tp; continue 'top; },
+                _ => ()
+            }
+        }
+        nodes[0].content.push_front(Tree::LetP({
+            let lit = defaultLit(tp);
+            PrimStatement {
+                name: Some(name), typ: tp,
+                exp: Some(Operand::C(lit))
+            }
+        }));
+    }
+}
+
+pub fn revert_graph(alloc: &mut Allocator, sm: &SymbolManager) {
     let mut subst: Substitution<Symbol> = Substitution::new();
     let nodes = &mut alloc.nodes;
     for id in 0..nodes.len() {
@@ -387,5 +453,67 @@ fn use_array(a: &ArrayInitializer, mp: &mut HashSet<Symbol>, sm: &SymbolManager)
             ElementInitializer::Expr(e) => useop(e, mp, sm),
             ElementInitializer::ArrayInitializer(child) => use_array(child, mp, sm)
         }
+    }
+}
+
+fn defaultLit(typ: Typ) -> Literal {
+    match typ {
+        Typ::Unknown => panic!("Unknown type!"),
+        Typ::Void => panic!("Void type!"),
+        Typ::Bool => Literal::Bool(false),
+        Typ::Char => Literal::Char('\0'),
+        Typ::Byte => Literal::Byte(0),
+        Typ::Int => Literal::Int(0),
+        Typ::Short => Literal::Short(0),
+        Typ::Long => Literal::Long(0),
+        Typ::Float => Literal::Float(0.0),
+        Typ::Double => Literal::Double(0.0),
+        Typ::Str => Literal::Null,
+        Typ::Array(_) => Literal::Null,
+        Typ::Class(_) => Literal::Null
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use tree_sitter::Parser;
+    use crate::{cssa, ir::*, ssa};
+    use crate::converter::convert;
+    use crate::hoist::hoist;
+    use crate::optimizer::optimize;
+    use crate::parameters::Parameters;
+    use crate::printer::print;
+    use crate::ssa::transform;
+    use crate::symbolmanager::SymbolManager;
+    use crate::typeinfer::typeinfer;
+    use crate::graph::print_graph;
+
+    #[test]
+    pub fn f() {
+        let text = r#"
+        class Test {
+            public static void main(String[] args_2) {
+                int count = 0;
+                do {
+                    count++;
+                } while (count < 100);
+                System.out.println(count);
+            }
+          }
+        "#;
+
+        let mut parser = Parser::new();
+        parser.set_language(&tree_sitter_java::language()).expect("Error loading Java grammar");
+        let tree = parser.parse(text, None).unwrap();
+        let mut sm = SymbolManager::new();
+        let class_name = "Test".to_string();
+        let params = Parameters { entry_class: class_name, entry_name: "main".to_string() };
+        let mut ast = convert(tree.root_node(), text.as_bytes(), &params, &mut sm);
+        ast = hoist(ast.as_ref(), &mut sm);
+        typeinfer(ast.as_mut(), &mut sm);
+        ast = Box::new(ssa::transform(*ast, &mut sm));
+        ast = optimize(ast.as_ref(), &mut sm);
+        ast = Box::new(super::revert(*ast, &mut sm));
+        assert!(false)
     }
 }

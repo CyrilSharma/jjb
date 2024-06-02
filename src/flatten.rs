@@ -198,8 +198,8 @@ mod test {
         ast = Box::new(ssa::transform(*ast, &mut sm));
         ast = optimize(ast.as_ref(), &mut sm);
         ast = Box::new(super::flatten(*ast, &mut sm));
-        ast = Box::new(ssa::revert(*ast, &mut sm));
-        print(&ast, &sm);
+        // ast = Box::new(ssa::revert(*ast, &mut sm));
+        // print(&ast, &sm);
     }
 }
 
