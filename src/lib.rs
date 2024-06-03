@@ -14,4 +14,5 @@ pub mod ssa;
 pub mod graph;
 pub mod flatten;
 pub mod cssa;
+pub mod dsu;
 mod substitution;

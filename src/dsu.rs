@@ -3,9 +3,14 @@ use std::mem::swap;
 pub struct Dsu { e: Vec<i64> }
 impl Dsu {
 	pub fn new(n: usize) -> Self { Self { e: vec![-1; n] } }
-	pub fn same(&self, a: usize, b: usize) -> bool { return self.find(a) == self.find(b); }
-	pub fn size(&self, x: usize) -> usize { return -self.e[self.find(x)] as usize; }
-	pub fn find(&self, x: usize) -> usize { 
+	pub fn same(&mut self, a: usize, b: usize) -> bool {
+		return self.find(a) == self.find(b);
+	}
+	pub fn size(&mut self, x: usize) -> usize {
+		let pos = self.find(x);
+		return -self.e[pos] as usize;
+	}
+	pub fn find(&mut self, x: usize) -> usize { 
         if self.e[x] < 0 { x }
         else {
             self.e[x] = self.find(self.e[x] as usize) as i64;

@@ -15,6 +15,7 @@ mod parameters;
 mod ssa;
 mod flatten;
 mod graph;
+mod dsu;
 use typeinfer::typeinfer;
 use hoist::hoist;
 use converter::convert;
