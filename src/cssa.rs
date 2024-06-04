@@ -478,86 +478,72 @@ pub fn revert_graph(alloc: &mut Allocator, sm: &mut SymbolManager) {
     }
 
     // Stolen shamelessly from https://inria.hal.science/inria-00349925v1/document
-    fn pcopy(args: Vec<Operand>, subst: &Substitution<Symbol>, sm: &mut SymbolManager) -> TreeContainer {
-        let mut i = 0;
-        let mut res = TreeContainer::new();
-        while i < args.len() {
-            let (name, exp, typ) = match (args[i].clone(), args[i+1].clone(), args[i+2].clone()) {
-                (Operand::V(a), Operand::V(b), Operand::Tp(t)) => (
-                    subst.subst(a), Operand::V(subst.subst(b)), t
-                ),
-                _ => panic!("")
+    fn pcopy(args: Vec<Operand>, subst: &Substitution<Symbol>, sm: &mut SymbolManager) -> TreeContainer {        
+        let (mut edges, mut types) = (Vec::new(), HashMap::new());
+        for i in (0..args.len()).step_by(3) {
+            let (dest, src, typ) = match (&args[i], &args[i+1], &args[i+2]) {
+                (Operand::V(a), Operand::V(b), Operand::Tp(t)) => {
+                    let (d, e, f) = (subst.subst(*a), subst.subst(*b), t);
+                    if d == e { continue }
+                    (d, e, f)
+                },
+                _ => panic!("Invalid Pcopy")
             };
-            let stmt = Tree::LetP(PrimStatement {
-                name: Some(name), typ, exp: Some(exp)
-            });
-            res.push_back(stmt);
-            i += 3;
+            if src == dest { continue }
+            edges.push((dest, src));
+            types.insert(dest, typ);
         }
-        return res;
-        
-        // let (mut edges, mut types) = (Vec::new(), HashMap::new());
-        // for i in (0..args.len()).step_by(3) {
-        //     let (dest, src, typ) = match (&args[i], &args[i+1], &args[i+2]) {
-        //         (Operand::V(a), Operand::V(b), Operand::Tp(t)) => {
-        //             if a == b { continue }
-        //             (*a, *b, t)
-        //         },
-        //         _ => panic!("Invalid Pcopy")
-        //     };
-        //     if src == dest { continue }
-        //     edges.push((dest, src));
-        //     types.insert(dest, typ);
-        // }
 
-        // let (mut ready, mut todo) = (Vec::new(), Vec::new());
-        // let (mut loc, mut pred) = (HashMap::new(), HashMap::new());
-        // for &(dest, src) in &edges {
-        //     // Where to find the "original" value of things we need to copy.
-        //     loc.insert(src, src);
-        //     // an assignment dest = src is considered as an edge dest <- src.
-        //     pred.insert(dest, src);
-        //     // Contains all the destinations of copies we need to process.
-        //     todo.push(dest);
-        // }
+        let (mut ready, mut todo) = (Vec::new(), Vec::new());
+        let (mut loc, mut pred) = (HashMap::new(), HashMap::new());
+        for &(dest, src) in &edges {
+            // Where to find the "original" value of things we need to copy.
+            loc.insert(src, src);
+            // an assignment dest = src is considered as an edge dest <- src.
+            pred.insert(dest, src);
+            // Contains all the destinations of copies we need to process.
+            todo.push(dest);
+        }
 
-        // // Ready contains variables who we can safely copy into.
-        // for &(dest, _) in &edges {
-        //     // dest is never used as the src for anything, so it's value isn't needed.
-        //     // (keep in mind it's still used as a dest!) and so we can queue it. i.e let 
-        //     // whoever wants to copy in do so.
-        //     if !loc.contains_key(&dest) { ready.push(dest); }
-        // }
+        // Ready contains variables who we can safely copy into.
+        for &(dest, _) in &edges {
+            // dest is never used as the src for anything, so it's value isn't needed.
+            // (keep in mind it's still used as a dest!) and so we can queue it. i.e let 
+            // whoever wants to copy in do so.
+            if !loc.contains_key(&dest) { ready.push(dest); }
+        }
 
-        // let temp = sm.fresh("cycle_breaker");
-        // let mut res = TreeContainer::new();
-        // while let Some(cycle) = todo.pop() {
-        //     // dest's value has been stored (or it didn't need to be)
-        //     // let dest's predecessor copy in.
-        //     while let Some(dest) = ready.pop() {
-        //         let srcvar = pred[&dest];
-        //         let srcloc = loc[&srcvar];
-        //         let tp = types[&dest];
-        //         res.push_back(emit_copy(dest, srcloc, *tp));
-        //         loc.insert(srcvar, dest);
-        //         // If the variable previously wasn't queued
-        //         // And if we need to stash something in the variable, queue it.
-        //         if srcloc == srcvar && pred.contains_key(&srcvar) {
-        //             ready.push(srcvar);
-        //         }
-        //     }
+        let mut res = TreeContainer::new();
+        while let Some(cycle) = todo.pop() {
+            // dest's value has been stored (or it didn't need to be)
+            // let dest's predecessor copy in.
+            while let Some(dest) = ready.pop() {
+                let srcvar = pred[&dest];
+                let srcloc = loc[&srcvar];
+                let tp = types[&dest];
+                res.push_back(emit_copy(dest, srcloc, *tp));
+                loc.insert(srcvar, dest);
+                // If the variable previously wasn't queued
+                // And if we need to stash something in the variable, queue it.
+                if srcloc == srcvar && pred.contains_key(&srcvar) {
+                    ready.push(srcvar);
+                }
+            }
 
-        //     // We've processed all the tree nodes, so this node is definitely part of a cycle.
-        //     // However, if it's predecessor was already stored in this node, then we must've already
-        //     // Dealt with it. This can happen if the cycle node was attached to some other tree.
-        //     if cycle != loc[&pred[&cycle]] {
-        //         res.push_back(emit_copy(temp, cycle, *types[&cycle]));
-        //         loc.insert(cycle, temp);
-        //         // We've backed it up. It's safe to let things copy in now.
-        //         ready.push(cycle);
-        //     }
-        // }
-        // res
+            // We've processed all the tree nodes, so this node is definitely part of a cycle.
+            // However, if it's predecessor was already stored in this node, then we must've already
+            // Dealt with it. This can happen if the cycle node was attached to some other tree.
+            if cycle != loc[&pred[&cycle]] {
+                // Technically, we only need to make a new one once per unique type.
+                // TODO: do that ^.
+                let temp = sm.fresh("cycle_breaker");
+                res.push_back(emit_copy(temp, cycle, *types[&cycle]));
+                loc.insert(cycle, temp);
+                // We've backed it up. It's safe to let things copy in now.
+                ready.push(cycle);
+            }
+        }
+        res
     }
 
     for id in 0..nodes.len() {
