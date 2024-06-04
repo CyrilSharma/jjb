@@ -11,7 +11,7 @@ use crate::graph::*;
 use crate::substitution::Substitution;
 use crate::symbolmanager::{Symbol, SymbolManager};
 pub fn transform(alloc: &mut Allocator, sm: &mut SymbolManager) {
-    fn insert_copy(pred: usize, assign: Tree, nodes: &mut Vec<CfgNode>) {
+    fn back_insert(pred: usize, assign: Tree, nodes: &mut Vec<CfgNode>) {
         if let Some(last_element) = nodes[pred].content.pop_back() {
             let insert_back = match &last_element {
                 Tree::Switch(_) | Tree::If(_) | Tree::Loop(_) |
@@ -32,12 +32,9 @@ pub fn transform(alloc: &mut Allocator, sm: &mut SymbolManager) {
         }
     }
 
-    fn process_phi(
-        el: Tree,
-        mp: &HashMap<Symbol, HashSet<Id>>,
-        nodes: &mut Vec<CfgNode>,
-        sm: &mut SymbolManager
-    ) -> (Tree, Vec<Operand>) {
+    fn process_phi(el: Tree, sm: &mut SymbolManager) -> (
+        Tree, (Symbol, Symbol, Typ), Vec<(Symbol, Symbol, Typ)>,
+    ) {
         let (name, typ, ops) = match el {
             Tree::LetP(PrimStatement {
                 exp: Some(Operand::T(ExprTree { op: Operation::Phi, args })),
@@ -50,29 +47,60 @@ pub fn transform(alloc: &mut Allocator, sm: &mut SymbolManager) {
             Operand::V(sym) => sym, _ => panic!("")
         }).collect();
         let new_args: Vec<Symbol> = old_args.iter().map(|sym| sm.refresh(sym)).collect();
-        for (&old_sym, &new_sym) in old_args[1..].iter().zip(new_args[1..].iter()) {
-            let assign = Tree::LetP(PrimStatement {
-                name: Some(new_sym),
-                exp: Some(Operand::V(old_sym)),
-                typ,
-            });
-            let pred = mp.get(&old_sym)
-                .expect(&format!("Variable {} not defined.", sm.uname(old_sym)))
-                .iter().next().expect("Invalid Stat Run.");
-            insert_copy(*pred, assign, nodes);
-        }
-        let wrapped_args = new_args.into_iter().map(|sym| Operand::V(sym)).collect();
+        let wrapped_args = new_args.iter().map(|sym| Operand::V(*sym)).collect();
         let assign_name = sm.refresh(&name);
         let res_phi = Tree::LetP(PrimStatement {
             exp: Some(Operand::T(ExprTree { op: Operation::Phi, args: wrapped_args })),
             name: Some(assign_name),
             typ,
         });
-        (res_phi, vec![Operand::V(name), Operand::V(assign_name), Operand::Tp(typ)])
+        let mut pred_args = Vec::new();
+        for (&old, &new) in old_args[1..].iter().zip(new_args[1..].iter()) {
+            pred_args.push((new, old, typ));
+        }
+        (res_phi, (name, assign_name, typ), pred_args)
+    }
+
+    fn pcopy(args: Vec<(Symbol, Symbol, Typ)>) -> Tree {
+        let mut nargs = Vec::new();
+        for (new, old, t) in args {
+            nargs.extend(vec![
+                Operand::V(new),
+                Operand::V(old),
+                Operand::Tp(t)
+            ]);
+        }
+        Tree::LetP(PrimStatement {
+            name: None,
+            typ: Typ::Void,
+            exp: Some(Operand::T(ExprTree {
+                op: Operation::Pcopy, args: nargs
+            }))
+        })
+    }
+
+    fn insert_pcopies(
+        pred_args: &Vec<(Symbol, Symbol, Typ)>,
+        mp: &HashMap<Symbol, HashSet<Id>>,
+        nodes: &mut Vec<CfgNode>,
+        sm: &SymbolManager
+    ) {
+        let mut bmap = HashMap::new();
+        for &(new, old, tp) in pred_args {
+            let pred = mp.get(&old)
+                .expect(&format!("Variable {} not defined.", sm.uname(old)))
+                .iter().next().expect("Invalid Stat Run.");
+            let entry = bmap.entry(pred).or_insert(Vec::new());
+            entry.push((new, old, tp));
+        }
+        for (block, args) in bmap {
+            back_insert(*block, pcopy(args), nodes);
+        }
     }
 
     let (mp, _) = crate::ssa::stat(alloc);
     let nodes = &mut alloc.nodes;
+    let mut pred_pcopies = Vec::new();
     for id in 0..nodes.len() {
         let mut phis = TreeContainer::new();
         let mut pcopy_args = Vec::new();
@@ -81,28 +109,20 @@ pub fn transform(alloc: &mut Allocator, sm: &mut SymbolManager) {
                 exp: Some(Operand::T(ExprTree { op: Operation::Phi, .. })),
                 ..
             }) = cur {
-                let (phi, assign) = process_phi(cur, &mp, nodes, sm);
+                let (phi, copy_args, pred_args) = process_phi(cur, sm);
                 phis.push_back(phi);
-                pcopy_args.extend(assign);
+                pcopy_args.push(copy_args);
+                pred_pcopies.extend(pred_args);
             } else {
                 nodes[id].content.push_front(cur);
                 let content = std::mem::take(&mut nodes[id].content);
-                if pcopy_args.len() > 0 {
-                    let assign = Tree::LetP(PrimStatement {
-                        name: None,
-                        typ: Typ::Void,
-                        exp: Some(Operand::T(ExprTree {
-                            op: Operation::Pcopy,
-                            args: pcopy_args
-                        }))
-                    });
-                    phis.push_back(assign);
-                }
+                if pcopy_args.len() > 0 { phis.push_back(pcopy(pcopy_args)) }
                 nodes[id].content = phis + content;
                 break;
             }
         }
     }
+    insert_pcopies(&pred_pcopies, &mp, nodes, sm);
 }
 
 pub fn coalesce(alloc: &mut Allocator, sm: &mut SymbolManager) {
@@ -396,43 +416,6 @@ fn use_array(a: &ArrayInitializer, mp: &mut HashSet<Symbol>, sm: &SymbolManager)
     }
 }
 
-#[allow(unused)]
-fn print_interference(interference: &HashMap<Symbol, HashSet<Symbol>>, sm: &SymbolManager) {
-    println!("digraph G {{");
-    println!(r#"  node [shape=box, fontname="Helvetica", fontsize=12, ordering="out"]"#);
-    for (&sym, edges) in interference {
-        println!(r#"{} [label=<
-    <table border="0" cellborder="0" cellspacing="0">
-      <tr><td> {} </td></tr>   
-    </table>
-  >]"#, sm.uname(sym), sm.uname(sym));
-        for (i, &nbr) in edges.iter().enumerate() {
-            println!("  {} -> {}", sm.uname(sym), sm.uname(nbr));
-        }
-    }
-    println!("}}");
-}
-
-
-#[allow(unused)]
-fn print_live(live: &Vec<HashSet<Symbol>>, alloc: &mut Allocator, sm: &SymbolManager) {
-    println!("digraph G {{");
-    println!(r#"  node [shape=box, fontname="Helvetica", fontsize=12, ordering="out"]"#);
-    for (block, vars) in live.iter().enumerate() {
-        println!(r#"{} [label=<
-    <table border="0" cellborder="0" cellspacing="0">
-      <tr><td> Node {} </td></tr>
-{}
-    </table>
-  >]"#, block, block, vars.iter().map(|v| sm.uname(*v)).collect::<Vec<String>>().join(", "));
-        for &var in &alloc.nodes[block].children {
-            println!("  {} -> {}", block, var);
-        }
-    }
-    println!("}}");
-}
-
-
 pub fn revert(tree: Tree, sm: &mut SymbolManager) -> Tree {
     match tree {
         Tree::Program(stmts) => Tree::Program(
@@ -467,46 +450,9 @@ pub fn revert(tree: Tree, sm: &mut SymbolManager) -> Tree {
     }
 }
 
-// Make the dominating definition the only declaration,
-// If there is no dominating definition, insert one.
-fn fix_declarations(alloc: &mut Allocator) {
-    let mut decl = HashMap::new();
-    let nodes = &mut alloc.nodes;
-    for id in 0..nodes.len() {
-        nodes[id].content.retain(|item| {
-            match item {
-                Tree::LetP(PrimStatement { name: Some(sym), typ, exp }) 
-                if *typ != Typ::Void => {
-                    decl.insert(*sym, *typ);
-                    *typ = Typ::Void;
-                    exp.is_some()
-                },
-                _ => true
-            }
-        })
-    }
-    
-    'top: for (name, tp) in decl {
-        for tree in nodes[0].content.iter_mut() {
-            match tree {
-                Tree::LetP(PrimStatement { name: Some(n), typ, .. })
-                if name == *n => { *typ = tp; continue 'top; },
-                _ => ()
-            }
-        }
-        nodes[0].content.push_front(Tree::LetP({
-            let lit = defaultLit(tp);
-            PrimStatement {
-                name: Some(name), typ: tp,
-                exp: Some(Operand::C(lit))
-            }
-        }));
-    }
-}
-
 pub fn revert_graph(alloc: &mut Allocator, sm: &mut SymbolManager) {
+    let mut subst: Substitution<Symbol> = Substitution::new();
     let nodes = &mut alloc.nodes;
-    let mut components = Dsu::new(sm.numsyms());
     for id in 0..nodes.len() {
         for cur in &nodes[id].content {
             if let Tree::LetP(PrimStatement {
@@ -514,19 +460,14 @@ pub fn revert_graph(alloc: &mut Allocator, sm: &mut SymbolManager) {
                 name: Some(nm),
                 ..
             }) = cur {
-                args.iter().for_each(|arg| match arg {
-                    Operand::V(sym) => { components.join(sym.id, nm.id); },
+                args.iter().skip(1).for_each(|arg| match arg {
+                    Operand::V(sym) => subst.add_subst(*sym, *nm),
                     _ => panic!("")
                 });
             }
         }
     }
-
-    let mut subst: Substitution<Symbol> = Substitution::new();
-    for i in 0..sm.numsyms() {
-        if components.find(i) == i { continue }
-        subst.add_subst(Symbol { id: i }, Symbol { id: components.find(i) });
-    }
+    // subst.bake();
 
     fn emit_copy(dest: Symbol, src: Symbol, t: Typ) -> Tree {
         Tree::LetP(PrimStatement {
@@ -537,69 +478,86 @@ pub fn revert_graph(alloc: &mut Allocator, sm: &mut SymbolManager) {
     }
 
     // Stolen shamelessly from https://inria.hal.science/inria-00349925v1/document
-    fn pcopy(args: Vec<Operand>, sm: &mut SymbolManager) -> TreeContainer {
-        let (mut edges, mut types) = (Vec::new(), HashMap::new());
-        for i in (0..args.len()).step_by(3) {
-            let (dest, src, typ) = match (&args[i], &args[i+1], &args[i+2]) {
-                (Operand::V(a), Operand::V(b), Operand::Tp(t)) => {
-                    if a == b { continue }
-                    (*a, *b, t)
-                },
-                _ => panic!("Invalid Pcopy")
-            };
-            if src == dest { continue }
-            edges.push((dest, src));
-            types.insert(dest, typ);
-        }
-
-        let (mut ready, mut todo) = (Vec::new(), Vec::new());
-        let (mut loc, mut pred) = (HashMap::new(), HashMap::new());
-        for &(dest, src) in &edges {
-            // Where to find the "original" value of things we need to copy.
-            loc.insert(src, src);
-            // an assignment dest = src is considered as an edge dest <- src.
-            pred.insert(dest, src);
-            // Contains all the destinations of copies we need to process.
-            todo.push(dest);
-        }
-
-        // Ready contains variables who we can safely copy into.
-        for &(dest, src) in &edges {
-            // dest is never used as the src for anything, so it's value isn't needed.
-            // (keep in mind it's still used as a dest!) and so we can queue it. i.e let 
-            // whoever wants to copy in do so.
-            if !loc.contains_key(&dest) { ready.push(dest); }
-        }
-
-        let mut temp = sm.fresh("cycle_breaker");
+    fn pcopy(args: Vec<Operand>, subst: &Substitution<Symbol>, sm: &mut SymbolManager) -> TreeContainer {
+        let mut i = 0;
         let mut res = TreeContainer::new();
-        while let Some(cycle) = todo.pop() {
-            // dest's value has been stored (or it didn't need to be)
-            // let dest's predecessor copy in.
-            while let Some(dest) = ready.pop() {
-                let srcvar = pred[&dest];
-                let src = loc[&srcvar];
-                let tp = types[&dest];
-                res.push_back(emit_copy(dest, src, *tp));
-                loc.insert(srcvar, dest);
-                // If the variable previously wasn't queued
-                // And if we need to stash something in the variable, queue it.
-                if src == srcvar && pred.contains_key(&src) {
-                    ready.push(src);
-                }
-            }
-
-            // We've processed all the tree nodes, so this node is definitely part of a cycle.
-            // However, if it's predecessor was already stored in this node, then we must've already
-            // Dealt with it. This can happen if the cycle node was attached to some other tree.
-            if cycle != loc[&pred[&cycle]] {
-                res.push_back(emit_copy(temp, cycle, *types[&cycle]));
-                loc.insert(cycle, temp);
-                // We've backed it up. It's safe to let things copy in now.
-                ready.push(cycle);
-            }
+        while i < args.len() {
+            let (name, exp, typ) = match (args[i].clone(), args[i+1].clone(), args[i+2].clone()) {
+                (Operand::V(a), Operand::V(b), Operand::Tp(t)) => (
+                    subst.subst(a), Operand::V(subst.subst(b)), t
+                ),
+                _ => panic!("")
+            };
+            let stmt = Tree::LetP(PrimStatement {
+                name: Some(name), typ, exp: Some(exp)
+            });
+            res.push_back(stmt);
+            i += 3;
         }
-        res
+        return res;
+        
+        // let (mut edges, mut types) = (Vec::new(), HashMap::new());
+        // for i in (0..args.len()).step_by(3) {
+        //     let (dest, src, typ) = match (&args[i], &args[i+1], &args[i+2]) {
+        //         (Operand::V(a), Operand::V(b), Operand::Tp(t)) => {
+        //             if a == b { continue }
+        //             (*a, *b, t)
+        //         },
+        //         _ => panic!("Invalid Pcopy")
+        //     };
+        //     if src == dest { continue }
+        //     edges.push((dest, src));
+        //     types.insert(dest, typ);
+        // }
+
+        // let (mut ready, mut todo) = (Vec::new(), Vec::new());
+        // let (mut loc, mut pred) = (HashMap::new(), HashMap::new());
+        // for &(dest, src) in &edges {
+        //     // Where to find the "original" value of things we need to copy.
+        //     loc.insert(src, src);
+        //     // an assignment dest = src is considered as an edge dest <- src.
+        //     pred.insert(dest, src);
+        //     // Contains all the destinations of copies we need to process.
+        //     todo.push(dest);
+        // }
+
+        // // Ready contains variables who we can safely copy into.
+        // for &(dest, _) in &edges {
+        //     // dest is never used as the src for anything, so it's value isn't needed.
+        //     // (keep in mind it's still used as a dest!) and so we can queue it. i.e let 
+        //     // whoever wants to copy in do so.
+        //     if !loc.contains_key(&dest) { ready.push(dest); }
+        // }
+
+        // let temp = sm.fresh("cycle_breaker");
+        // let mut res = TreeContainer::new();
+        // while let Some(cycle) = todo.pop() {
+        //     // dest's value has been stored (or it didn't need to be)
+        //     // let dest's predecessor copy in.
+        //     while let Some(dest) = ready.pop() {
+        //         let srcvar = pred[&dest];
+        //         let srcloc = loc[&srcvar];
+        //         let tp = types[&dest];
+        //         res.push_back(emit_copy(dest, srcloc, *tp));
+        //         loc.insert(srcvar, dest);
+        //         // If the variable previously wasn't queued
+        //         // And if we need to stash something in the variable, queue it.
+        //         if srcloc == srcvar && pred.contains_key(&srcvar) {
+        //             ready.push(srcvar);
+        //         }
+        //     }
+
+        //     // We've processed all the tree nodes, so this node is definitely part of a cycle.
+        //     // However, if it's predecessor was already stored in this node, then we must've already
+        //     // Dealt with it. This can happen if the cycle node was attached to some other tree.
+        //     if cycle != loc[&pred[&cycle]] {
+        //         res.push_back(emit_copy(temp, cycle, *types[&cycle]));
+        //         loc.insert(cycle, temp);
+        //         // We've backed it up. It's safe to let things copy in now.
+        //         ready.push(cycle);
+        //     }
+        // }
+        // res
     }
 
     for id in 0..nodes.len() {
@@ -613,7 +571,7 @@ pub fn revert_graph(alloc: &mut Allocator, sm: &mut SymbolManager) {
                 exp: Some(Operand::T(ExprTree { op: Operation::Pcopy, args })),
                 ..
             }) = cur {
-                res.append(pcopy(args, sm));
+                res.append(pcopy(args, &subst, sm));
             } else {
                 substtree(&mut cur, &subst);
                 res.push_back(cur);
@@ -660,6 +618,43 @@ fn substarray(a: &mut ArrayInitializer, state: &Substitution<Symbol>) {
     })
 }
 
+// Make the dominating definition the only declaration,
+// If there is no dominating definition, insert one.
+fn fix_declarations(alloc: &mut Allocator) {
+    let mut decl = HashMap::new();
+    let nodes = &mut alloc.nodes;
+    for id in 0..nodes.len() {
+        nodes[id].content.retain(|item| {
+            match item {
+                Tree::LetP(PrimStatement { name: Some(sym), typ, exp }) 
+                if *typ != Typ::Void => {
+                    decl.insert(*sym, *typ);
+                    *typ = Typ::Void;
+                    exp.is_some()
+                },
+                _ => true
+            }
+        })
+    }
+    
+    'top: for (name, tp) in decl {
+        for tree in nodes[0].content.iter_mut() {
+            match tree {
+                Tree::LetP(PrimStatement { name: Some(n), typ, .. })
+                if name == *n => { *typ = tp; continue 'top; },
+                _ => ()
+            }
+        }
+        nodes[0].content.push_front(Tree::LetP({
+            let lit = defaultLit(tp);
+            PrimStatement {
+                name: Some(name), typ: tp,
+                exp: Some(Operand::C(lit))
+            }
+        }));
+    }
+}
+
 fn defaultLit(typ: Typ) -> Literal {
     match typ {
         Typ::Unknown => panic!("Unknown type!"),
@@ -676,6 +671,42 @@ fn defaultLit(typ: Typ) -> Literal {
         Typ::Array(_) => Literal::Null,
         Typ::Class(_) => Literal::Null
     }
+}
+
+#[allow(unused)]
+fn print_interference(interference: &HashMap<Symbol, HashSet<Symbol>>, sm: &SymbolManager) {
+    println!("digraph G {{");
+    println!(r#"  node [shape=box, fontname="Helvetica", fontsize=12, ordering="out"]"#);
+    for (&sym, edges) in interference {
+        println!(r#"{} [label=<
+    <table border="0" cellborder="0" cellspacing="0">
+      <tr><td> {} </td></tr>   
+    </table>
+  >]"#, sm.uname(sym), sm.uname(sym));
+        for (i, &nbr) in edges.iter().enumerate() {
+            println!("  {} -> {}", sm.uname(sym), sm.uname(nbr));
+        }
+    }
+    println!("}}");
+}
+
+
+#[allow(unused)]
+fn print_live(live: &Vec<HashSet<Symbol>>, alloc: &mut Allocator, sm: &SymbolManager) {
+    println!("digraph G {{");
+    println!(r#"  node [shape=box, fontname="Helvetica", fontsize=12, ordering="out"]"#);
+    for (block, vars) in live.iter().enumerate() {
+        println!(r#"{} [label=<
+    <table border="0" cellborder="0" cellspacing="0">
+      <tr><td> Node {} </td></tr>
+{}
+    </table>
+  >]"#, block, block, vars.iter().map(|v| sm.uname(*v)).collect::<Vec<String>>().join(", "));
+        for &var in &alloc.nodes[block].children {
+            println!("  {} -> {}", block, var);
+        }
+    }
+    println!("}}");
 }
 
 #[cfg(test)]
@@ -698,20 +729,11 @@ mod test {
         let text = r#"
         class Test {
             public static void main(String[] args) {
-                int i = 0, j = 0, k = 0;
-                while (i++ < 10) {
-                    while (j++ < 10) {
-                        while (k++ < 10) {
-            
-                        }
-                        if ((j ^ k) < (i ^ k)) break;
-                    }
-                    if ((j ^ i) < (k ^ j)) break;
-                }
-                System.out.printf(
-                    "%d %d %d",
-                    i, j, k
-                );
+                int count = 0;
+                do {
+                    count++;
+                } while (count < 100);
+                System.out.println(count);
             }
           }
         "#;

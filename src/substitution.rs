@@ -23,4 +23,14 @@ impl<T: Eq + PartialEq + Hash + Copy + Debug> Substitution<T> {
         }
         cur
     }
+
+    pub fn bake(&mut self) {
+        let mut baked = HashMap::new();
+        for (key, _) in &self.map {
+            let res = self.subst(*key);
+            if res == *key { continue }
+            baked.insert(*key, res);
+        }
+        self.map = baked;
+    }
 }
