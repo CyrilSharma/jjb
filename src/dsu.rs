@@ -1,6 +1,6 @@
 use std::mem::swap;
 // This was the wrong tool, but keeping it in case it is ever needed again.
-pub struct Dsu { e: Vec<i64> }
+pub struct Dsu { pub e: Vec<i64> }
 impl Dsu {
 	pub fn new(n: usize) -> Self { Self { e: vec![-1; n] } }
 	pub fn same(&mut self, a: usize, b: usize) -> bool {

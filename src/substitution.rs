@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::fmt::Debug;
 
 #[derive(Clone)]
-pub struct Substitution<T: Eq + PartialEq + Hash + Copy> {
+pub struct Substitution<T: Eq + PartialEq + Hash + Copy + Debug> {
     map: HashMap<T, T>
 }
 
-impl<T: Eq + PartialEq + Hash + Copy> Substitution<T> {
+impl<T: Eq + PartialEq + Hash + Copy + Debug> Substitution<T> {
     pub fn new() -> Self {
         Self { map: HashMap::new() }
     }
