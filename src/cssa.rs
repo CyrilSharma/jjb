@@ -1,15 +1,12 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::ops::Sub;
-
-use crate::dsu;
 use crate::dsu::Dsu;
-use crate::flatten;
 use crate::graph;
 use crate::ir::*;
 use crate::graph::*;
 use crate::substitution::Substitution;
 use crate::symbolmanager::{Symbol, SymbolManager};
+
 pub fn transform(alloc: &mut Allocator, sm: &mut SymbolManager) {
     fn back_insert(pred: usize, assign: Tree, nodes: &mut Vec<CfgNode>) {
         if let Some(last_element) = nodes[pred].content.pop_back() {
@@ -126,8 +123,7 @@ pub fn transform(alloc: &mut Allocator, sm: &mut SymbolManager) {
 }
 
 pub fn coalesce(alloc: &mut Allocator, sm: &mut SymbolManager) {
-    let interference = interference(alloc, sm);
-    let mut value = Dsu::new(sm.numsyms());
+    let mut value = HashMap::new();
     let mut moverelated = Vec::new();
     for id in 0..alloc.nodes.len() {
         precompute(
@@ -137,8 +133,8 @@ pub fn coalesce(alloc: &mut Allocator, sm: &mut SymbolManager) {
         )
     }
 
-
-    let mut subst = build_subst(moverelated, interference, value);
+    let interf = interference(alloc, sm);
+    let mut subst = build_subst(moverelated, interf, value, sm);
     for _ in 0..10 { // I'll implement fixed point iteration one day
         for id in 0..alloc.nodes.len() {
             let list = std::mem::take(&mut alloc.nodes[id].content);
@@ -146,15 +142,22 @@ pub fn coalesce(alloc: &mut Allocator, sm: &mut SymbolManager) {
         }
     }
 
+    // In this case, i_41 has the same value as i_122,
+    // But i_122 never has the same value as i_41.
+    // How to encode this in value...
+
+    // i_41 = i_122
+    // i_122 = i_41 + 1
+    // They use the dominance tree to address this...
     fn precompute(
         list: &TreeContainer,
         moverelated: &mut Vec<(Symbol, Symbol)>,
-        value: &mut Dsu
+        value: &mut HashMap<Symbol, Symbol>
     ) -> () {
         for item in list {
             match item {
                 Tree::LetP(PrimStatement { name: Some(name), exp: Some(Operand::V(sym)), .. }) => {
-                    value.join(name.id, sym.id);
+                    value.insert(*name, *value.get(sym).expect(""));
                     moverelated.push((*name, *sym))
                 },
                 Tree::LetP(PrimStatement { name: None, exp: Some(Operand::T(
@@ -163,12 +166,15 @@ pub fn coalesce(alloc: &mut Allocator, sm: &mut SymbolManager) {
                     for i in (0..args.len()).step_by(3) {
                         match (&args[i], &args[i+1]) {
                             (Operand::V(a), Operand::V(b)) => {
-                                value.join(a.id, b.id);
+                                value.insert(*a, *value.get(b).expect("")); 
                                 moverelated.push((*a, *b))
                             },
                             _ => ()
                         }
                     }
+                },
+                Tree::LetP(PrimStatement { name: Some(name), exp, .. }) => {
+                    value.insert(*name, *name);
                 },
                 _ => ()
             }
@@ -177,26 +183,16 @@ pub fn coalesce(alloc: &mut Allocator, sm: &mut SymbolManager) {
 
     fn build_subst(
         moverelated: Vec<(Symbol, Symbol)>,
-        mut interference: HashMap<Symbol, HashSet<Symbol>>,
-        mut value: Dsu
+        mut interference: Interference,
+        value: HashMap<Symbol, Symbol>,
+        sm: &mut SymbolManager
     ) -> Substitution<Symbol> {
-        let mut components = Dsu::new(value.e.len());
-        let mut res = Substitution::new();
-        let symlist: Vec<Symbol> = interference.iter().map(|(a, _)| *a).collect();
+        let symlist: Vec<Symbol> = interference.data.iter().map(|(a, _)| *a).collect();
         let mut tryfuse = |a: Symbol, b: Symbol| {
-            if components.same(a.id, b.id) { return false }
-            if interference[&a].contains(&b) && !value.same(a.id, b.id) { return false }
-            if let Some(edges) = interference.get_mut(&b) {
-                for item in std::mem::take(edges) {
-                    let entry = interference.entry(a).or_insert(HashSet::new());
-                    entry.insert(item);
-                }
-            }
-            // res.add_subst(b, a);
-            components.join(a.id, b.id);
-            return true;
+            let samev = false; // value.get(&a).expect("") == value.get(&b).expect("");
+            if interference.interferes(a, b) && !samev { return }
+            interference.merge(a, b);
         };
-
         for (a, b) in moverelated { tryfuse(a, b); }
         for (i, &a) in symlist.iter().enumerate() {
             for (j, &b) in symlist.iter().enumerate() {
@@ -204,12 +200,7 @@ pub fn coalesce(alloc: &mut Allocator, sm: &mut SymbolManager) {
                 tryfuse(a, b);
             }
         }
-        for &a in symlist.iter() {
-            let parent = components.find(a.id);
-            if parent == a.id { continue; }
-            res.add_subst(a, Symbol { id: parent })
-        }
-        res
+        interference.to_subst()
     }
 
     fn coalesce_list(
@@ -249,13 +240,58 @@ pub fn coalesce(alloc: &mut Allocator, sm: &mut SymbolManager) {
     }
 }
 
-fn interference(alloc: &mut Allocator, sm: &mut SymbolManager) -> HashMap<Symbol, HashSet<Symbol>> {
-    let mut interference = HashMap::new();
-    let mut add_interference = |name: Symbol, cur: &HashSet<Symbol>| {
-        let entry = interference.entry(name).or_insert(HashSet::new());
-        for &sym in cur.iter() { entry.insert(sym); }
-    };
-    let remove_def = |name, cur: &mut HashSet<Symbol>| cur.remove(&name);
+struct Interference {
+    data: HashMap<Symbol, HashSet<Symbol>>,
+    subst: Substitution<Symbol>
+}
+
+impl Interference {
+    fn new() -> Self {
+        Interference {
+            data: HashMap::new(),
+            subst: Substitution::new()
+        }
+    }
+
+    fn interferes(&self, a: Symbol, b: Symbol) -> bool {
+        let (a, b) = (self.subst.subst(a), self.subst.subst(b));
+        if let Some(edges) = &self.data.get(&a) {
+            return edges.contains(&b);
+        }
+        return true;
+    }
+
+    fn merge(&mut self, a: Symbol, b: Symbol) {
+        let (a, b) = (self.subst.subst(a), self.subst.subst(b));
+        if a == b { return }
+        let mut data = std::mem::take(&mut self.data);
+        for sym in std::mem::take(data.get_mut(&b).expect("")) {
+            let entry = data.entry(a).or_insert(HashSet::new());
+            entry.insert(sym);
+            let entry = data.entry(sym).or_insert(HashSet::new());
+            entry.insert(a);
+        }
+        self.data = data;
+        self.subst.add_subst(b, a);
+    }
+
+    fn add_interference(&mut self, a: Symbol, b: &HashSet<Symbol>) {
+        for &sym in b {
+            let entry = self.data.entry(a).or_insert(HashSet::new());
+            entry.insert(sym);
+            let entry = self.data.entry(sym).or_insert(HashSet::new());
+            entry.insert(a);
+        }
+    }
+
+    fn to_subst(mut self) -> Substitution<Symbol> {
+        self.subst.bake();
+        self.subst
+    }
+}
+
+fn interference(alloc: &mut Allocator, sm: &mut SymbolManager) -> Interference {
+    let mut interference = Interference::new();
     let live = liveout(alloc, sm);
     let nodes = &mut alloc.nodes;
     for id in 0..nodes.len() {
@@ -267,7 +303,7 @@ fn interference(alloc: &mut Allocator, sm: &mut SymbolManager) -> HashMap<Symbol
                 )), ..  }) => {
                     for i in (0..args.len()).step_by(3) {
                         match &args[i] {
-                            Operand::V(a) => add_interference(*a, &mut cur),
+                            Operand::V(a) => interference.add_interference(*a, &cur),
                             _ => ()
                         }
                     }
@@ -275,17 +311,36 @@ fn interference(alloc: &mut Allocator, sm: &mut SymbolManager) -> HashMap<Symbol
                         match &args[i] {
                             Operand::V(a) => {
                                 useop(&args[i+1], &mut cur, sm);
-                                remove_def(*a, &mut cur);
+                                cur.remove(a);
                             },
                             _ => ()
                         }
                     }
                 },
                 Tree::LetP(ref p) => {
-                    if let Some(n) = &p.name { add_interference(*n, &mut cur) }
+                    if let Some(n) = &p.name { interference.add_interference(*n, &cur) }
                     if let Some(e) = &p.exp { useop(&e, &mut cur, sm) }
-                    if let Some(n) = &p.name { remove_def(*n, &mut cur); }
+                    if let Some(n) = &p.name { cur.remove(n); }
                 },
+                _ => ()
+            }
+        }
+    }
+
+
+    let mut fusephi = |name, args: &Vec<Operand>| {
+        for arg in &args[1..] {
+            let sym = match arg { Operand::V(sym) => *sym, _ => panic!() };
+            interference.merge(name, sym);
+        }
+    };
+
+    for id in 0..nodes.len() {
+        for item in nodes[id].content.iter() {
+            match item {
+                Tree::LetP(PrimStatement { name: Some(name), exp: Some(Operand::T(
+                    ExprTree { op: Operation::Phi, ref args }
+                )), ..  }) => fusephi(*name, args),
                 _ => ()
             }
         }
@@ -426,13 +481,7 @@ pub fn revert(tree: Tree, sm: &mut SymbolManager) -> Tree {
             let (mut allocator, next_map) = graph::build(f.body);
             transform(&mut allocator, sm);
             // print_graph(&allocator.nodes, sm);
-            // coalesce(&mut allocator, sm);
-            // print_graph(&allocator.nodes, sm);
-            // YOU MUST DO FLATTENING HERE.
-            // It actually cannot mess anything up,
-            // We don't allow inlining into Phi functions
-            // And it doesn't matter if var_that_will_be_inlined = c;
-            // Was supposed to have its name changed, there was only one possible invocation site anyways.
+            coalesce(&mut allocator, sm);
             revert_graph(&mut allocator, sm);
             fix_declarations(&mut allocator);
             FunDeclaration {
@@ -451,24 +500,6 @@ pub fn revert(tree: Tree, sm: &mut SymbolManager) -> Tree {
 }
 
 pub fn revert_graph(alloc: &mut Allocator, sm: &mut SymbolManager) {
-    let mut subst: Substitution<Symbol> = Substitution::new();
-    let nodes = &mut alloc.nodes;
-    for id in 0..nodes.len() {
-        for cur in &nodes[id].content {
-            if let Tree::LetP(PrimStatement {
-                exp: Some(Operand::T(ExprTree { op: Operation::Phi, args })),
-                name: Some(nm),
-                ..
-            }) = cur {
-                args.iter().skip(1).for_each(|arg| match arg {
-                    Operand::V(sym) => subst.add_subst(*sym, *nm),
-                    _ => panic!("")
-                });
-            }
-        }
-    }
-    // subst.bake();
-
     fn emit_copy(dest: Symbol, src: Symbol, t: Typ) -> Tree {
         Tree::LetP(PrimStatement {
             name: Some(dest),
@@ -478,15 +509,11 @@ pub fn revert_graph(alloc: &mut Allocator, sm: &mut SymbolManager) {
     }
 
     // Stolen shamelessly from https://inria.hal.science/inria-00349925v1/document
-    fn pcopy(args: Vec<Operand>, subst: &Substitution<Symbol>, sm: &mut SymbolManager) -> TreeContainer {        
+    fn pcopy(args: Vec<Operand>, sm: &mut SymbolManager) -> TreeContainer {        
         let (mut edges, mut types) = (Vec::new(), HashMap::new());
         for i in (0..args.len()).step_by(3) {
             let (dest, src, typ) = match (&args[i], &args[i+1], &args[i+2]) {
-                (Operand::V(a), Operand::V(b), Operand::Tp(t)) => {
-                    let (d, e, f) = (subst.subst(*a), subst.subst(*b), t);
-                    if d == e { continue }
-                    (d, e, f)
-                },
+                (Operand::V(a), Operand::V(b), Operand::Tp(t)) => (*a, *b, t),
                 _ => panic!("Invalid Pcopy")
             };
             if src == dest { continue }
@@ -546,9 +573,10 @@ pub fn revert_graph(alloc: &mut Allocator, sm: &mut SymbolManager) {
         res
     }
 
+    let nodes = &mut alloc.nodes;
     for id in 0..nodes.len() {
         let mut res = TreeContainer::new();
-        while let Some(mut cur) = nodes[id].content.pop_front() {
+        while let Some(cur) = nodes[id].content.pop_front() {
             if let Tree::LetP(PrimStatement {
                 exp: Some(Operand::T(ExprTree { op: Operation::Phi, .. })),
                 ..
@@ -557,9 +585,8 @@ pub fn revert_graph(alloc: &mut Allocator, sm: &mut SymbolManager) {
                 exp: Some(Operand::T(ExprTree { op: Operation::Pcopy, args })),
                 ..
             }) = cur {
-                res.append(pcopy(args, &subst, sm));
+                res.append(pcopy(args, sm));
             } else {
-                substtree(&mut cur, &subst);
                 res.push_back(cur);
             }
         }
@@ -699,13 +726,12 @@ fn print_live(live: &Vec<HashSet<Symbol>>, alloc: &mut Allocator, sm: &SymbolMan
 mod test {
     use tree_sitter::Parser;
     use crate::flatten::{self, flatten};
-    use crate::{cssa, ir::*, ssa};
+    use crate::ssa;
     use crate::converter::convert;
     use crate::hoist::hoist;
     use crate::optimizer::optimize;
     use crate::parameters::Parameters;
     use crate::printer::print;
-    use crate::ssa::transform;
     use crate::symbolmanager::SymbolManager;
     use crate::typeinfer::typeinfer;
     use crate::graph::print_graph;
@@ -715,11 +741,21 @@ mod test {
         let text = r#"
         class Test {
             public static void main(String[] args) {
-                int count = 0;
-                do {
-                    count++;
-                } while (count < 100);
-                System.out.println(count);
+                int i = 0, j = 0, k = 0;
+                label1: while (i++ < 10) {
+                    label2: while (j++ < 10) {
+                        label3: while (k++ < 10) {
+                            System.out.printf("%d %d %d\n", i, j, k);
+                            if ((i ^ j) < (i ^ k)) {
+                                continue label2;
+                            }
+                            if (i < 4) { continue label1; }
+                            break label3;
+                        }
+                        if (j > 3) { continue label2; }
+                        break label1;
+                    }
+                }
             }
           }
         "#;
@@ -735,9 +771,8 @@ mod test {
         typeinfer(ast.as_mut(), &mut sm);
         ast = Box::new(ssa::transform(*ast, &mut sm));
         ast = optimize(ast.as_ref(), &mut sm);
-        // ast = Box::new(flatten::flatten(*ast, &mut sm));
+        ast = Box::new(flatten::flatten(*ast, &mut sm));
         ast = Box::new(super::revert(*ast, &mut sm));
-        // print(&ast, &sm);
-        // assert!(false)
+        print(&ast, &sm);
     }
 }
