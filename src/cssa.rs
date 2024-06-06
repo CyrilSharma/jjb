@@ -123,7 +123,7 @@ pub fn transform(alloc: &mut Allocator, sm: &mut SymbolManager) {
 }
 
 pub fn coalesce(alloc: &mut Allocator, sm: &mut SymbolManager) {
-    let mut value = HashMap::new();
+    let mut value = Dsu::new(sm.numsyms());
     let mut moverelated = Vec::new();
     for id in 0..alloc.nodes.len() {
         precompute(
@@ -148,16 +148,18 @@ pub fn coalesce(alloc: &mut Allocator, sm: &mut SymbolManager) {
 
     // i_41 = i_122
     // i_122 = i_41 + 1
-    // They use the dominance tree to address this...
+    // They use the dominance tree to address
+    // Perhaps, I should compute the dominance tree,
+    // Then just use their methods instead of handrolling my own interference graph.
     fn precompute(
         list: &TreeContainer,
         moverelated: &mut Vec<(Symbol, Symbol)>,
-        value: &mut HashMap<Symbol, Symbol>
+        value: &mut Dsu
     ) -> () {
         for item in list {
             match item {
                 Tree::LetP(PrimStatement { name: Some(name), exp: Some(Operand::V(sym)), .. }) => {
-                    value.insert(*name, *value.get(sym).expect(""));
+                    value.join(name.id, sym.id);
                     moverelated.push((*name, *sym))
                 },
                 Tree::LetP(PrimStatement { name: None, exp: Some(Operand::T(
@@ -166,15 +168,12 @@ pub fn coalesce(alloc: &mut Allocator, sm: &mut SymbolManager) {
                     for i in (0..args.len()).step_by(3) {
                         match (&args[i], &args[i+1]) {
                             (Operand::V(a), Operand::V(b)) => {
-                                value.insert(*a, *value.get(b).expect("")); 
+                                value.join(a.id, b.id);
                                 moverelated.push((*a, *b))
                             },
                             _ => ()
                         }
                     }
-                },
-                Tree::LetP(PrimStatement { name: Some(name), exp, .. }) => {
-                    value.insert(*name, *name);
                 },
                 _ => ()
             }
@@ -184,13 +183,13 @@ pub fn coalesce(alloc: &mut Allocator, sm: &mut SymbolManager) {
     fn build_subst(
         moverelated: Vec<(Symbol, Symbol)>,
         mut interference: Interference,
-        value: HashMap<Symbol, Symbol>,
+        mut value: Dsu,
         sm: &mut SymbolManager
     ) -> Substitution<Symbol> {
         let symlist: Vec<Symbol> = interference.data.iter().map(|(a, _)| *a).collect();
         let mut tryfuse = |a: Symbol, b: Symbol| {
-            let samev = false; // value.get(&a).expect("") == value.get(&b).expect("");
-            if interference.interferes(a, b) && !samev { return }
+            if interference.interferes(a, b, &mut value) { return }
+            println!("Coalescesing {}, {}", sm.uname(a), sm.uname(b));
             interference.merge(a, b);
         };
         for (a, b) in moverelated { tryfuse(a, b); }
@@ -242,6 +241,7 @@ pub fn coalesce(alloc: &mut Allocator, sm: &mut SymbolManager) {
 
 struct Interference {
     data: HashMap<Symbol, HashSet<Symbol>>,
+    equivalences: HashMap<Symbol, Vec<Symbol>>,
     subst: Substitution<Symbol>
 }
 
@@ -249,29 +249,38 @@ impl Interference {
     fn new() -> Self {
         Interference {
             data: HashMap::new(),
+            equivalences: HashMap::new(),
             subst: Substitution::new()
         }
     }
 
-    fn interferes(&self, a: Symbol, b: Symbol) -> bool {
+    fn interferes(&self, a: Symbol, b: Symbol, value: &mut Dsu) -> bool {
         let (a, b) = (self.subst.subst(a), self.subst.subst(b));
-        if let Some(edges) = &self.data.get(&a) {
-            return edges.contains(&b);
+        let (av, bv) = (vec![a], vec![b]);
+        let acomp = self.equivalences.get(&a).unwrap_or(&av);
+        let bcomp = self.equivalences.get(&b).unwrap_or(&bv);
+        print!("a: "); for &asym in acomp { print!("{} ", asym.id) } println!();
+        print!("b: "); for &bsym in bcomp { print!("{} ", bsym.id) } println!();
+        for asym in acomp {
+            for bsym in bcomp {
+                if value.same(asym.id, bsym.id) {
+                    continue;
+                }
+                if self.data[&asym].contains(&bsym) {
+                    println!("{} interferes with {}", asym.id, bsym.id);
+                    return true;
+                }
+            }
         }
-        return true;
+        false
     }
 
     fn merge(&mut self, a: Symbol, b: Symbol) {
         let (a, b) = (self.subst.subst(a), self.subst.subst(b));
         if a == b { return }
-        let mut data = std::mem::take(&mut self.data);
-        for sym in std::mem::take(data.get_mut(&b).expect("")) {
-            let entry = data.entry(a).or_insert(HashSet::new());
-            entry.insert(sym);
-            let entry = data.entry(sym).or_insert(HashSet::new());
-            entry.insert(a);
-        }
-        self.data = data;
+        let mut bcomp = std::mem::take(self.equivalences.entry(b).or_insert(vec![b]));
+        let acomp = self.equivalences.entry(a).or_insert(vec![a]);
+        acomp.append(&mut bcomp);
         self.subst.add_subst(b, a);
     }
 
@@ -290,6 +299,7 @@ impl Interference {
     }
 }
 
+// Easily invalidated. But it will do for now.
 fn interference(alloc: &mut Allocator, sm: &mut SymbolManager) -> Interference {
     let mut interference = Interference::new();
     let live = liveout(alloc, sm);
@@ -480,7 +490,7 @@ pub fn revert(tree: Tree, sm: &mut SymbolManager) -> Tree {
         Tree::LetF(f) => Tree::LetF({
             let (mut allocator, next_map) = graph::build(f.body);
             transform(&mut allocator, sm);
-            // print_graph(&allocator.nodes, sm);
+            print_graph(&allocator.nodes, sm);
             coalesce(&mut allocator, sm);
             revert_graph(&mut allocator, sm);
             fix_declarations(&mut allocator);
@@ -741,21 +751,11 @@ mod test {
         let text = r#"
         class Test {
             public static void main(String[] args) {
-                int i = 0, j = 0, k = 0;
-                label1: while (i++ < 10) {
-                    label2: while (j++ < 10) {
-                        label3: while (k++ < 10) {
-                            System.out.printf("%d %d %d\n", i, j, k);
-                            if ((i ^ j) < (i ^ k)) {
-                                continue label2;
-                            }
-                            if (i < 4) { continue label1; }
-                            break label3;
-                        }
-                        if (j > 3) { continue label2; }
-                        break label1;
-                    }
-                }
+                int count = 0;
+                do {
+                    count++;
+                } while (count < 100);
+                System.out.println(count);
             }
           }
         "#;

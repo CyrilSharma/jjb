@@ -73,7 +73,8 @@ pub fn transform(tree: Tree, sm: &mut SymbolManager) -> Tree {
 
 // https://www.cs.cornell.edu/courses/cs6120/2020fa/lesson/5/
 pub fn transform_graph(alloc: &mut Allocator, sm: &mut SymbolManager) {
-    let (doms, dominance_frontier) = dominance(alloc);
+    let doms = graph::dominance(alloc);
+    let dominance_frontier = graph::dominance_frontier(&doms, alloc);
     let mut idom: Vec<Vec<usize>> = vec![Vec::new(); alloc.len()];
     for (i, d) in doms.into_iter().enumerate() { if d != i { idom[d].push(i) } }
     let (vars, typs) = stat(alloc);
@@ -92,76 +93,6 @@ pub fn transform_graph(alloc: &mut Allocator, sm: &mut SymbolManager) {
     
     let mut state = State { stack: HashMap::new(), sm };
     rename(0, &mut state, alloc, &typs, &idom);
-}
-
-pub fn dominance(alloc: &Allocator) -> (Vec<Id>, Vec<FixedBitSet>) {
-    fn dfs(node: Id, v: &mut Vec<Id>, alloc: &Allocator, visited: &mut Vec<bool>) {
-        visited[node] = true;
-        let cfg = alloc.grab(node);
-        for &child in &cfg.children {
-            if visited[child] { continue }
-            dfs(child, v, alloc, visited)
-        }
-        v.push(node);
-    }
-
-    // https://web.archive.org/web/20210422111834/https://www.cs.rice.edu/~keith/EMBED/dom.pdf
-    fn intersect(a: Id, b: Id, doms: &Vec<usize>, index: &Vec<usize>) -> Id {
-        let mut fingera = a;
-        let mut fingerb = b;
-        while fingera != fingerb {
-            while index[fingera] < index[fingerb] {
-                fingera = doms[fingera];
-            }
-            while index[fingerb] < index[fingera] {
-                fingerb = doms[fingerb];
-            }
-        }
-        return fingera;
-    }
-
-    // N^2 but with incredible constant factor.
-    let undefined: usize = alloc.len(); 
-    let (mut postorder, mut index) = (Vec::new(), vec![undefined; alloc.len()]);
-    postorder.reserve(alloc.len());
-    dfs(0, &mut postorder, alloc, &mut vec![false; alloc.len()]);
-    for (i, p) in postorder.iter().enumerate() { index[*p] = i; }
-    let mut doms = vec![undefined; alloc.len()];
-    doms[0] = 0;
-    loop {
-        let mut changed = false;
-        for &node in postorder.iter().rev().skip(1) {
-            let preds = &alloc.grab(node).preds;
-            let mut new_idom = undefined;
-            for &p in preds {
-                if doms[p] == undefined { continue }
-                if new_idom == undefined { new_idom = p; continue }
-                new_idom = intersect(p, new_idom, &doms, &index);
-            }
-            if doms[node] != new_idom {
-                doms[node] = new_idom;
-                changed = true;
-            }
-        }
-        if !changed { break }
-    }
-
-    let mut df: Vec<FixedBitSet> = vec![
-        FixedBitSet::with_capacity(alloc.len());
-        alloc.len()
-    ];
-    for b in 0..alloc.len() {
-        let preds = &alloc.grab(b).preds;
-        if preds.len() < 2 { continue; } 
-        for &p in preds {
-            let mut runner = p;
-            while runner != doms[b] {
-                df[runner].set(b, true);
-                runner = doms[runner];
-            }
-        }
-    }
-    (doms, df)
 }
 
 pub fn stat(alloc: &Allocator) -> (
