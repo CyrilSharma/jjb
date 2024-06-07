@@ -348,6 +348,193 @@ pub fn stat(alloc: &Allocator) -> (
 }
 
 #[allow(unused)]
+fn print_live(live: &Vec<HashSet<Symbol>>, alloc: &mut Allocator, sm: &SymbolManager) {
+    println!("digraph G {{");
+    println!(r#"  node [shape=box, fontname="Helvetica", fontsize=12, ordering="out"]"#);
+    for (block, vars) in live.iter().enumerate() {
+        println!(r#"{} [label=<
+    <table border="0" cellborder="0" cellspacing="0">
+      <tr><td> Node {} </td></tr>
+{}
+    </table>
+  >]"#, block, block, vars.iter().map(|v| sm.uname(*v)).collect::<Vec<String>>().join(", "));
+        for &var in &alloc.nodes[block].children {
+            println!("  {} -> {}", block, var);
+        }
+    }
+    println!("}}");
+}
+
+fn merge(a: &mut HashSet<Symbol>, b: &HashSet<Symbol>) {
+    for el in b { a.insert(*el); }
+}
+
+pub fn liveout(alloc: &mut Allocator, sm: &SymbolManager) -> Vec<HashSet<Symbol>> {
+    fn dfs(node: Id, v: &mut Vec<Id>, alloc: &Allocator, visited: &mut Vec<bool>) {
+        visited[node] = true;
+        let cfg = alloc.grab(node);
+        for &child in &cfg.children {
+            if visited[child] { continue }
+            dfs(child, v, alloc, visited)
+        }
+        v.push(node);
+    }
+
+    // A variable is live out of a block if it is live-out of it's successors,
+    // OR if it is used by its successors.
+    let mut postorder = Vec::new();
+    postorder.reserve(alloc.len());
+    dfs(0, &mut postorder, alloc, &mut vec![false; alloc.len()]);
+    let mut live = vec![HashSet::new(); alloc.len()];
+    let (used_by_block, def_by_block) = used(alloc, sm);
+    // for (block, usage) in used_by_block.iter().enumerate() {
+    //     println!("used in block {}", block);
+    //     for &item in usage {
+    //         println!("-- {}", sm.uname(item));
+    //     }
+    // }
+    loop {
+        let mut changed = false;
+        for &node in postorder.iter() {
+            let children = &alloc.grab(node).children;
+            let mut new_live = HashSet::new();
+            for &child in children {
+                merge(&mut new_live, &live[child]);
+                for &def in &def_by_block[child] {
+                    new_live.remove(&def);
+                }
+                merge(&mut new_live, &used_by_block[child]);
+            }
+            if live[node] != new_live {
+                live[node] = new_live;
+                changed = true;
+            }
+        }
+        if !changed { break }
+    }
+
+    // for (block, usage) in live.iter().enumerate() {
+    //     println!("live out of block {}", block);
+    //     for &item in usage {
+    //         println!("-- {}", sm.uname(item));
+    //     }
+    // }
+
+    live
+}
+
+pub fn livein(alloc: &mut Allocator, sm: &SymbolManager) -> Vec<HashSet<Symbol>> {
+    let (used_by_block, def_by_block) = used(alloc, sm);
+    let liveout = liveout(alloc, sm);
+    let mut livein = vec![HashSet::new(); alloc.len()];
+    for i in 0..alloc.len() {
+        let mut temp = HashSet::new();
+        merge(&mut temp, &liveout[i]);
+        for &def in &def_by_block[i] {
+            temp.remove(&def);
+        }
+        merge(&mut temp, &used_by_block[i]);
+        livein[i] = temp;
+    }
+    return livein;
+}
+
+pub fn used(alloc: &mut Allocator, sm: &SymbolManager) -> (Vec<HashSet<Symbol>>, Vec<HashSet<Symbol>>) {
+    let (mp, _) = stat(alloc); // this is a stupid way to do this. do it via ith predecessor.
+    let mut uses = vec![HashSet::new(); alloc.len()];
+    let mut defs = vec![HashSet::new(); alloc.len()];
+    for node in alloc.nodes.iter() {
+        for item in node.content.iter().rev() {
+            match item {
+                Tree::LetP(PrimStatement { exp: Some(Operand::T(
+                    ExprTree { op: Operation::Phi, args })), .. }) => {
+                    for arg in &args[1..] {
+                        let sym = match arg { Operand::V(sym) => *sym, _ => panic!() };
+                        let pred = mp[&sym].iter().next().unwrap();
+                        uses[*pred].insert(sym);
+                    }
+                },
+                _ => ()
+            }
+        }
+    }
+    for (i, node) in alloc.nodes.iter().enumerate() {
+        for item in node.content.iter().rev() {
+            match item {
+                Tree::LetP(PrimStatement { exp: Some(Operand::T(
+                    ExprTree { op: Operation::Phi, .. })), name: Some(name), .. }) => {
+                    uses[i].remove(&name);
+                    defs[i].insert(*name);
+                },
+                Tree::LetP(PrimStatement { exp: Some(Operand::T(
+                    ExprTree { args, op: Operation::Pcopy })), .. }) => {
+                    for index in (0..args.len()).step_by(3) {
+                        match (&args[index], &args[index + 1]) {
+                            (Operand::V(a), Operand::V(b)) => {
+                                uses[i].insert(*b);
+                                uses[i].remove(a);
+                                defs[i].insert(*a);
+                                // println!("defd: {}", sm.uname(*a));
+                            },
+                            _ => panic!("Invalid Pcopy!")
+                        }
+                    }
+                },
+                Tree::LetP(p) => {
+                    if let Some(e) = p.exp.as_ref() { useop(e,  &mut uses[i], sm) }
+                    if let Some(n) = p.name.as_ref() {
+                        uses[i].remove(n);
+                        defs[i].insert(*n);
+                        // println!("defd: {}", sm.uname(*n));
+                        // TING
+                    }
+                },
+                Tree::Block(_) | Tree::Break(_) | Tree::Continue(_) => (),
+                Tree::Switch(s) => useop(&s.arg,  &mut uses[i], sm),
+                Tree::Loop(l) => useop(&l.cond,  &mut uses[i], sm),
+                Tree::If(l) => useop(&l.cond,  &mut uses[i], sm),
+                Tree::Return(r) => if let Some(e) = r.val.as_ref() { useop(e,  &mut uses[i], sm) },
+                Tree::Try(_) => todo!(),
+                _ => panic!("Invalid node in Block")
+            }
+        }
+    }
+    (uses, defs)
+}
+
+// I hate having to write this every time.
+pub fn useop(e: &Operand, mp: &mut HashSet<Symbol>, sm: &SymbolManager) {
+    match e {
+        Operand::This(_) | Operand::Super(_) |
+        Operand::C(_) | Operand::Tp(_) => (),
+        Operand::V(sym) => { mp.insert(*sym); },
+        Operand::T(ExprTree { args, op: Operation::New }) => {
+            args[1..].iter().for_each(|e| useop(e, mp, sm))
+        }
+        Operand::T(ExprTree { args, op: Operation::InvokeVirtual | Operation::InvokeStatic }) => {
+            useop(&args[0], mp, sm);
+            args[2..].iter().for_each(|e| useop(e, mp, sm))
+        },
+        Operand::T(ExprTree { args, .. }) => 
+            args.iter().for_each(|e| useop(e, mp, sm)),
+        Operand::A(a) => match a {
+            ArrayExpression::Empty(v) => v.iter().for_each(|e| useop(e, mp, sm)),
+            ArrayExpression::Initializer(a) => use_array(a, mp, sm)
+        }
+    }
+}
+
+pub fn use_array(a: &ArrayInitializer, mp: &mut HashSet<Symbol>, sm: &SymbolManager) {
+    for item in a {
+        match item.as_ref() {
+            ElementInitializer::Expr(e) => useop(e, mp, sm),
+            ElementInitializer::ArrayInitializer(child) => use_array(child, mp, sm)
+        }
+    }
+}
+
+
+#[allow(unused)]
 pub fn print_graph(nodes: &[CfgNode], sm: &SymbolManager) {
     println!("digraph G {{");
     println!(r#"  node [shape=box, fontname="Helvetica", fontsize=12, ordering="out"]"#);

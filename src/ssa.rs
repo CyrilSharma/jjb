@@ -74,6 +74,7 @@ pub fn transform(tree: Tree, sm: &mut SymbolManager) -> Tree {
 // https://www.cs.cornell.edu/courses/cs6120/2020fa/lesson/5/
 pub fn transform_graph(alloc: &mut Allocator, sm: &mut SymbolManager) {
     let doms = graph::dominance(alloc);
+    let livein = graph::livein(alloc, sm);
     let dominance_frontier = graph::dominance_frontier(&doms, alloc);
     let mut idom: Vec<Vec<usize>> = vec![Vec::new(); alloc.len()];
     for (i, d) in doms.into_iter().enumerate() { if d != i { idom[d].push(i) } }
@@ -82,6 +83,7 @@ pub fn transform_graph(alloc: &mut Allocator, sm: &mut SymbolManager) {
         let mut blocks: Vec<Id> = block_set.clone().into_iter().collect();
         while let Some(vassigned) = blocks.pop() {
             for block in dominance_frontier[vassigned].ones() {
+                if !livein[block].contains(&v) { continue }
                 insert_phi(v, typs[&v], block, alloc);
                 if !block_set.contains(&block) {
                     block_set.insert(block);
@@ -250,6 +252,9 @@ mod test {
 
     #[test]
     pub fn f() {
+        // TODO: conditionally insert PHI nodes only if they are live.
+        // This was SSA doesn't get in the way of optimizations too much.
+        // https://piazza.com/class_profile/get_resource/hy7enxf648g7me/i3krcd5wbgx6zu
         let text = r#"
         class Test {
             public static void main(String[] args_2) {

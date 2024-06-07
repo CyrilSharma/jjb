@@ -48,6 +48,7 @@ fn flattenlist(mut list: TreeContainer, census: &mut HashMap<Symbol, usize>, sm:
                 },
                 (Some(_), None) => res.push_back(item),
                 (Some(n), Some(e)) => {
+                    // println!("n: {}, census.get(n) = {:?}", sm.uname(n), census.get(&n));
                     // WARNING. CHECK TO MAKE SURE THE OPERATION IS STABLE AND PURE.
                     if let Operand::T(ExprTree { op: Operation::Phi, .. }) = e {
                         // inline(e, census, &values);
@@ -151,7 +152,7 @@ fn inline_array(
 #[cfg(test)]
 mod test {
     use tree_sitter::Parser;
-    use crate::{ir::*, ssa};
+    use crate::{cssa, ir::*, ssa};
     use crate::converter::convert;
     use crate::hoist::hoist;
     use crate::optimizer::optimize;
@@ -194,12 +195,12 @@ mod test {
         let mut ast = convert(tree.root_node(), text.as_bytes(), &params, &mut sm);
         ast = hoist(ast.as_ref(), &mut sm);
         typeinfer(ast.as_mut(), &mut sm);
-        print(&ast, &sm);
         ast = Box::new(ssa::transform(*ast, &mut sm));
         ast = optimize(ast.as_ref(), &mut sm);
         ast = Box::new(super::flatten(*ast, &mut sm));
-        // ast = Box::new(ssa::revert(*ast, &mut sm));
-        // print(&ast, &sm);
+        print(&ast, &sm);
+        ast = Box::new(cssa::revert(*ast, &mut sm));
+        print(&ast, &sm);
     }
 }
 
