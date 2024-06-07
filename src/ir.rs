@@ -78,6 +78,44 @@ pub enum Literal {
     String(String)
 }
 
+impl Literal {
+    pub fn get_double(&self) -> Option<f64> {
+        match self {
+            Literal::Float(b) => Some(*b as f64),
+            Literal::Double(i) => Some(*i as f64),
+            _ => None
+        }
+    }
+
+    pub fn double_rank(&self) -> u32 {
+        match self {
+            Literal::Float(b) => 1,
+            Literal::Double(i) => 2,
+            _ => 0
+        }
+    }
+
+    pub fn get_int(&self) -> Option<i64> {
+        match self {
+            Literal::Byte(b) => Some(*b as i64),
+            Literal::Int(i) => Some(*i as i64),
+            Literal::Short(s) => Some(*s as i64),
+            Literal::Long(l) => Some(*l),
+            _ => None
+        }
+    }
+
+    pub fn int_rank(&self) -> u32 {
+        match self {
+            Literal::Byte(b) => 1,
+            Literal::Int(i) => 2,
+            Literal::Short(s) => 3,
+            Literal::Long(l) => 4,
+            _ => 0
+        }
+    }
+}
+
 impl fmt::Display for Literal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

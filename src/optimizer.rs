@@ -284,7 +284,17 @@ pub mod shrink {
                 }))
             },
             Tree::LetP(PrimStatement { name, typ, exp }) => {
-                TreeContainer::make(Tree::LetP(PrimStatement {
+                if let Some(Operand::T(ExprTree { op, ref args })) = exp {
+                    if const_op(op) && args.iter().all(|a| match a { Op::C(_) => true, _ => false }) {
+                        let nargs =  args.iter().map(|a| match a {
+                            Op::C(l) => l.clone(), _ => panic!()
+                        }).collect();
+                        return TreeContainer::make(Tree::LetP(PrimStatement {
+                            name, typ, exp: Some(Operand::C(const_eval(op, &nargs)))
+                        }))
+                    }
+                }
+                return TreeContainer::make(Tree::LetP(PrimStatement {
                     name, typ, exp: exp.map(|e| substop(e, state))
                 }))
             }, 
@@ -358,6 +368,190 @@ pub mod shrink {
             ),
             Tree::Continue(_) => TreeContainer::make(root),
             Tree::EntryPoint(_) => TreeContainer::make(root)
+        }
+    }
+
+    fn const_op(op: Operation) -> bool {
+        match op {
+            Operation::InstanceOf | Operation::New |
+            Operation::ArrayNew | Operation::InvokeVirtual |
+            Operation::InvokeStatic | Operation::Phi |
+            Operation::Access | Operation::Index |
+            Operation::Assert | Operation::Throw => false,
+            _ => true
+        }
+    }
+
+    fn const_eval(op: Operation, args: &Vec<Literal>) -> Literal {
+        match args.as_slice() {
+            [a, b] => bineval(op, a.clone(), b.clone()),
+            [a] => uneval(op, a.clone()),
+            _ => panic!("Empty arguments list")
+        }
+    }
+
+    fn bineval(op: Operation, a: Literal, b: Literal) -> Literal {
+        if let (Some(ai), Some(bi)) = (a.get_int(), b.get_double()) {
+            let ai = ai as f64;
+            match op {
+                Operation::Eq => return Literal::Bool(ai == bi),
+                Operation::Neq => return Literal::Bool(ai != bi),
+                Operation::G => return Literal::Bool(ai > bi),
+                Operation::L => return Literal::Bool(ai < bi),
+                Operation::GEq => return Literal::Bool(ai >= bi),
+                Operation::LEq => return Literal::Bool(ai <= bi),
+                _ => ()
+            }
+            let eval = match op {
+                Operation::Add => ai + bi,
+                Operation::Sub => ai - bi,
+                Operation::Mul => ai * bi,
+                Operation::Div => ai / bi,
+                Operation::Mod => ai % bi,
+                _ => panic!("Unknown Integer Operation!")
+            };
+            return match b.double_rank() {
+                0 => panic!("Invalid Integer Operation"),
+                1 => Literal::Float(eval as f32),
+                2 => Literal::Double(eval.try_into().unwrap()),
+                _ => panic!("Impossible integer type")
+            }
+        }
+        if let (Some(ai), Some(bi)) = (a.get_double(), b.get_int()) {
+            let bi = bi as f64;
+            match op {
+                Operation::Eq => return Literal::Bool(ai == bi),
+                Operation::Neq => return Literal::Bool(ai != bi),
+                Operation::G => return Literal::Bool(ai > bi),
+                Operation::L => return Literal::Bool(ai < bi),
+                Operation::GEq => return Literal::Bool(ai >= bi),
+                Operation::LEq => return Literal::Bool(ai <= bi),
+                _ => ()
+            }
+            let eval = match op {
+                Operation::Add => ai + bi,
+                Operation::Sub => ai - bi,
+                Operation::Mul => ai * bi,
+                Operation::Div => ai / bi,
+                Operation::Mod => ai % bi,
+                _ => panic!("Unknown Integer Operation!")
+            };
+            return match a.double_rank() {
+                0 => panic!("Invalid Integer Operation"),
+                1 => Literal::Float(eval as f32),
+                2 => Literal::Double(eval.try_into().unwrap()),
+                _ => panic!("Impossible integer type")
+            }
+        }
+        if let (Some(ai), Some(bi)) = (a.get_int(), b.get_int()) {
+            match op {
+                Operation::Eq => return Literal::Bool(ai == bi),
+                Operation::Neq => return Literal::Bool(ai != bi),
+                Operation::G => return Literal::Bool(ai > bi),
+                Operation::L => return Literal::Bool(ai < bi),
+                Operation::GEq => return Literal::Bool(ai >= bi),
+                Operation::LEq => return Literal::Bool(ai <= bi),
+                _ => ()
+            }
+            let eval = match op {
+                Operation::Add => ai + bi,
+                Operation::Sub => ai - bi,
+                Operation::Mul => ai * bi,
+                Operation::Div => ai / bi,
+                Operation::Mod => ai % bi,
+                Operation::Shl => ai << bi,
+                Operation::Shr => ai >> bi,
+                Operation::UShr => ((ai as u64) >> bi) as i64,
+                Operation::And => ai & bi,
+                Operation::Or => ai | bi,
+                Operation::Xor => ai ^ bi,
+                _ => panic!("Unknown Integer Operation!")
+            };
+            // This is technically wrong in the event you wanted overflow.
+            let mx = std::cmp::max(a.int_rank(), b.int_rank());
+            return match mx {
+                0 => panic!("Invalid Integer Operation"),
+                1 => Literal::Byte(eval.try_into().unwrap()),
+                2 => Literal::Short(eval.try_into().unwrap()),
+                3 => Literal::Int(eval.try_into().unwrap()),
+                4 => Literal::Long(eval),
+                _ => panic!("Impossible integer type")
+            }
+        }
+        if let (Some(ai), Some(bi)) = (a.get_double(), b.get_double()) {
+            match op {
+                Operation::Eq => return Literal::Bool(ai == bi),
+                Operation::Neq => return Literal::Bool(ai != bi),
+                Operation::G => return Literal::Bool(ai > bi),
+                Operation::L => return Literal::Bool(ai < bi),
+                Operation::GEq => return Literal::Bool(ai >= bi),
+                Operation::LEq => return Literal::Bool(ai <= bi),
+                _ => ()
+            }
+            let eval = match op {
+                Operation::Add => ai + bi,
+                Operation::Sub => ai - bi,
+                Operation::Mul => ai * bi,
+                Operation::Div => ai / bi,
+                Operation::Mod => ai % bi,
+                _ => panic!("Unknown Integer Operation!")
+            };
+            // This is technically wrong in the event you wanted overflow.
+            let mx = std::cmp::max(a.double_rank(), b.double_rank());
+            return match mx {
+                0 => panic!("Invalid Integer Operation"),
+                1 => Literal::Float(eval as f32),
+                2 => Literal::Double(eval.try_into().unwrap()),
+                _ => panic!("Impossible Float type")
+            }
+        }
+        if let (Literal::Bool(ab), Literal::Bool(bb)) = (a, b) {
+            return match op {
+                Operation::Eq => Literal::Bool(ab == bb),
+                Operation::Neq => Literal::Bool(ab != bb),
+                Operation::LAnd => Literal::Bool(ab && bb),
+                Operation::LOr => Literal::Bool(ab || bb),
+                _ => panic!("Invalid Conditional Operation!")
+            }
+        }
+        panic!("Unknown Binary Operation")
+    }
+
+    fn uneval(op: Operation, a: Literal) -> Literal {
+        match a {
+            Literal::Bool(b) => match op {
+                Operation::LNot => Literal::Bool(!b),
+                _ => panic!("Unknown")
+            }
+            Literal::Byte(b) => match op {
+                Operation::Sub => Literal::Byte(-b),
+                Operation::Not => Literal::Byte(!b),
+                _ => panic!("Unknown")
+            },
+            Literal::Short(b) => match op {
+                Operation::Sub => Literal::Short(-b),
+                Operation::Not => Literal::Short(!b),
+                _ => panic!("Unknown")
+            },
+            Literal::Int(b) => match op {
+                Operation::Sub => Literal::Int(-b),
+                Operation::Not => Literal::Int(!b),
+                _ => panic!("Unknown")
+            },
+            Literal::Long(b) => match op {
+                Operation::Sub => Literal::Long(-b),
+                Operation::Not => Literal::Long(!b),
+                _ => panic!("Unknown")
+            },
+            Literal::Float(b) => match op {
+                Operation::Sub => Literal::Float(-b),
+                _ => panic!("Unknown")
+            },
+            Literal::Double(b) => match op {
+                Operation::Sub => Literal::Double(-b),
+                _ => panic!("Unknown")
+            },
+            _ => panic!("Invalid Unary Operation")
         }
     }
 
