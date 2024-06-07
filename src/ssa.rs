@@ -54,7 +54,6 @@ pub fn transform(tree: Tree, sm: &mut SymbolManager) -> Tree {
         Tree::LetI(i) => Tree::LetI(i),
         Tree::LetF(f) => Tree::LetF({
             let (mut allocator, next_map) = graph::build(f.body);
-            print_graph(&allocator.nodes, sm);
             transform_graph(&mut allocator, sm);
             FunDeclaration {
                 body: graph::fold(allocator, &next_map),

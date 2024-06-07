@@ -436,7 +436,6 @@ pub fn livein(alloc: &mut Allocator, sm: &SymbolManager) -> Vec<HashSet<Symbol>>
         merge(&mut temp, &used_by_block[i]);
         livein[i] = temp;
     }
-    print_live(&livein, alloc, sm);
     return livein;
 }
 
@@ -451,7 +450,9 @@ pub fn used(alloc: &mut Allocator, sm: &SymbolManager) -> (Vec<HashSet<Symbol>>,
                     ExprTree { op: Operation::Phi, args })), .. }) => {
                     for arg in &args[1..] {
                         let sym = match arg { Operand::V(sym) => *sym, _ => panic!() };
-                        let pred = mp[&sym].iter().next().unwrap();
+                        let entry = mp.get(&sym);
+                        if entry.is_none() { continue }
+                        let pred = entry.unwrap().iter().next().unwrap();
                         uses[*pred].insert(sym);
                     }
                 },

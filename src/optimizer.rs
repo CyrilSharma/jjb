@@ -243,7 +243,7 @@ pub mod shrink {
                     match args[i] {
                         Op::V(sym) => {
                             let nsym = state.subst(sym);
-                            if !processed.contains(&nsym) {
+                            if !processed.contains(&nsym) && !state.dead(sym) {
                                 nargs.push(Operand::V(nsym));
                                 processed.insert(nsym);
                             }
@@ -284,16 +284,6 @@ pub mod shrink {
                 }))
             },
             Tree::LetP(PrimStatement { name, typ, exp }) => {
-                if let Some(Operand::T(ExprTree { op, ref args })) = exp {
-                    if const_op(op) && args.iter().all(|a| match a { Op::C(_) => true, _ => false }) {
-                        let nargs =  args.iter().map(|a| match a {
-                            Op::C(l) => l.clone(), _ => panic!()
-                        }).collect();
-                        return TreeContainer::make(Tree::LetP(PrimStatement {
-                            name, typ, exp: Some(Operand::C(const_eval(op, &nargs)))
-                        }))
-                    }
-                }
                 return TreeContainer::make(Tree::LetP(PrimStatement {
                     name, typ, exp: exp.map(|e| substop(e, state))
                 }))
@@ -332,10 +322,18 @@ pub mod shrink {
                 if state.applied_once(label) { state.addc(label) }
                 let ntrue = traverselist(btrue, state);
                 let nfalse = traverselist(bfalse, state);
-                TreeContainer::make(Tree::If(IfStatement {
-                    cond: substop(cond, state), label,
-                    btrue: ntrue, bfalse: nfalse
-                }))
+                TreeContainer::make(match cond {
+                    Operand::C(Literal::Bool(true)) => Tree::Block(
+                        BlockStatement { label, bbody: ntrue }
+                    ),
+                    Operand::C(Literal::Bool(false)) => Tree::Block(
+                        BlockStatement { label, bbody: nfalse }
+                    ),
+                    _ => Tree::If(IfStatement {
+                        cond: substop(cond, state), label,
+                        btrue: ntrue, bfalse: nfalse
+                    })
+                })
             },
             Tree::Break(label) => {
                 if let Some(cont) = state.l_env.get(&label).cloned() {
@@ -384,9 +382,18 @@ pub mod shrink {
 
     fn const_eval(op: Operation, args: &Vec<Literal>) -> Literal {
         match args.as_slice() {
+            [a, b, c] => terneval(op, a.clone(), b.clone(), c.clone()),
             [a, b] => bineval(op, a.clone(), b.clone()),
             [a] => uneval(op, a.clone()),
             _ => panic!("Empty arguments list")
+        }
+    }
+
+    fn terneval(op: Operation, a: Literal, b: Literal, c: Literal) -> Literal {
+        match a {
+            Literal::Bool(true) => b,
+            Literal::Bool(false) => c,
+            _ => panic!("Invalid Ternary")
         }
     }
 
@@ -566,10 +573,22 @@ pub mod shrink {
             },
             // Literally wrong, but we don't really support super atm.
             Operand::Super(s) => Operand::Super(s),
-            Operand::V(sym) => Operand::V(state.subst(sym)),
-            Operand::T(ExprTree { op, args }) => Operand::T(ExprTree {
-                op, args: args.into_iter().map(|a| substop(a, state)).collect()
-            }),
+            Operand::V(sym) => {
+                if let Some(l) = state.const_env.get(&sym) {
+                    return Operand::C(l.clone());
+                }
+                Operand::V(state.subst(sym))
+            },
+            Operand::T(ExprTree { op, args }) => {
+                if const_op(op) && args.iter().all(|a| match a { Operand::C(_) => true, _ => false }) {
+                    let nargs =  args.iter().map(|a| match a {
+                        Operand::C(l) => l.clone(), _ => panic!()
+                    }).collect();
+                    return Operand::C(const_eval(op, &nargs))
+                }
+                let nargs =  args.into_iter().map(|a| substop(a, state)).collect();
+                Operand::T(ExprTree { op, args: nargs })
+            },
             Operand::A(A::Empty(a)) => Operand::A(A::Empty(Box::new(
                 a.into_iter().map(|a| substop(a, state)).collect()
             ))),
