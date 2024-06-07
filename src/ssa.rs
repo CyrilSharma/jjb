@@ -54,8 +54,8 @@ pub fn transform(tree: Tree, sm: &mut SymbolManager) -> Tree {
         Tree::LetI(i) => Tree::LetI(i),
         Tree::LetF(f) => Tree::LetF({
             let (mut allocator, next_map) = graph::build(f.body);
+            print_graph(&allocator.nodes, sm);
             transform_graph(&mut allocator, sm);
-            // print_graph(&allocator.nodes, sm);
             FunDeclaration {
                 body: graph::fold(allocator, &next_map),
                 ..f
@@ -247,6 +247,7 @@ mod test {
     use crate::hoist::hoist;
     use crate::optimizer::optimize;
     use crate::parameters::Parameters;
+    use crate::printer::print;
     use crate::symbolmanager::SymbolManager;
     use crate::typeinfer::typeinfer;
 
@@ -259,9 +260,11 @@ mod test {
         class Test {
             public static void main(String[] args_2) {
                 int count = 0;
-                do {
-                    count++;
-                } while (count < 100);
+                label: while (++count < 30) {
+                    count += 1;
+                    if (count % 2 != 1) { continue label; }
+                    count += 1;
+                }
                 System.out.println(count);
             }
           }
@@ -276,7 +279,9 @@ mod test {
         let mut ast = convert(tree.root_node(), text.as_bytes(), &params, &mut sm);
         ast = hoist(ast.as_ref(), &mut sm);
         typeinfer(ast.as_mut(), &mut sm);
+        print(ast.as_ref(), &sm);
         ast = Box::new(super::transform(*ast, &mut sm));
+        // print(ast.as_ref(), &sm);
         ast = optimize(ast.as_ref(), &mut sm);
         assert!(true)
     }

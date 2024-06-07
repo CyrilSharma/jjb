@@ -436,6 +436,7 @@ pub fn livein(alloc: &mut Allocator, sm: &SymbolManager) -> Vec<HashSet<Symbol>>
         merge(&mut temp, &used_by_block[i]);
         livein[i] = temp;
     }
+    print_live(&livein, alloc, sm);
     return livein;
 }
 
@@ -471,23 +472,22 @@ pub fn used(alloc: &mut Allocator, sm: &SymbolManager) -> (Vec<HashSet<Symbol>>,
                     for index in (0..args.len()).step_by(3) {
                         match (&args[index], &args[index + 1]) {
                             (Operand::V(a), Operand::V(b)) => {
+                                // Order doesn't matter as we're in SSA.
                                 uses[i].insert(*b);
                                 uses[i].remove(a);
                                 defs[i].insert(*a);
-                                // println!("defd: {}", sm.uname(*a));
                             },
                             _ => panic!("Invalid Pcopy!")
                         }
                     }
                 },
                 Tree::LetP(p) => {
-                    if let Some(e) = p.exp.as_ref() { useop(e,  &mut uses[i], sm) }
+                    // Order DOES matter as we use this both in and out of SSA.
                     if let Some(n) = p.name.as_ref() {
                         uses[i].remove(n);
                         defs[i].insert(*n);
-                        // println!("defd: {}", sm.uname(*n));
-                        // TING
                     }
+                    if let Some(e) = p.exp.as_ref() { useop(e,  &mut uses[i], sm) }
                 },
                 Tree::Block(_) | Tree::Break(_) | Tree::Continue(_) => (),
                 Tree::Switch(s) => useop(&s.arg,  &mut uses[i], sm),
