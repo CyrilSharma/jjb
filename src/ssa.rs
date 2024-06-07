@@ -77,7 +77,7 @@ pub fn transform_graph(alloc: &mut Allocator, sm: &mut SymbolManager) {
     let dominance_frontier = graph::dominance_frontier(&doms, alloc);
     let mut idom: Vec<Vec<usize>> = vec![Vec::new(); alloc.len()];
     for (i, d) in doms.into_iter().enumerate() { if d != i { idom[d].push(i) } }
-    let (vars, typs) = stat(alloc);
+    let (vars, typs) = graph::stat(alloc);
     for (v, mut block_set) in vars {
         let mut blocks: Vec<Id> = block_set.clone().into_iter().collect();
         while let Some(vassigned) = blocks.pop() {
@@ -93,31 +93,6 @@ pub fn transform_graph(alloc: &mut Allocator, sm: &mut SymbolManager) {
     
     let mut state = State { stack: HashMap::new(), sm };
     rename(0, &mut state, alloc, &typs, &idom);
-}
-
-pub fn stat(alloc: &Allocator) -> (
-    HashMap<Symbol, HashSet<usize>>,
-    HashMap<Symbol, Typ>,
-) {
-    let mut mp = HashMap::new();
-    let mut typ = HashMap::new();
-    for id in 0..alloc.len() {
-        let content = &alloc.grab(id).content;
-        for tree in content {
-            match tree {
-                Tree::LetP(p) => if let Some(pname) = p.name {
-                    let id_set = mp.entry(pname).or_insert(HashSet::new());
-                    id_set.insert(id);
-                    if p.typ != Typ::Void { typ.insert(pname, p.typ); }
-                },
-                Tree::Block(_) | Tree::Switch(_) | Tree::LetI(_) | 
-                Tree::Loop(_) | Tree::If(_) | Tree::Return(_) |
-                Tree::Break(_) | Tree::Continue(_) | Tree::EntryPoint(_) => (),
-                _ => panic!("Invalid Tree Type in SSA")
-            }
-        }
-    }
-    (mp, typ)
 }
 
 pub fn insert_phi(v: Symbol, typ: Typ, block: Id, alloc: &mut Allocator) {
@@ -266,16 +241,12 @@ pub fn verify(alloc: &Allocator, sm: &SymbolManager) -> Result<(), String> {
 #[cfg(test)]
 mod test {
     use tree_sitter::Parser;
-    use crate::ir::*;
     use crate::converter::convert;
     use crate::hoist::hoist;
     use crate::optimizer::optimize;
     use crate::parameters::Parameters;
-    use crate::printer::print;
-    use crate::ssa::transform;
     use crate::symbolmanager::SymbolManager;
     use crate::typeinfer::typeinfer;
-    use crate::graph::print_graph;
 
     #[test]
     pub fn f() {
@@ -302,9 +273,6 @@ mod test {
         typeinfer(ast.as_mut(), &mut sm);
         ast = Box::new(super::transform(*ast, &mut sm));
         ast = optimize(ast.as_ref(), &mut sm);
-        // print(&ast, &sm);
-        // ast = Box::new(super::revert(*ast, &mut sm));
-        // print(&ast, &sm);
         assert!(true)
     }
 }

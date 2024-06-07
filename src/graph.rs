@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use fixedbitset::FixedBitSet;
 
 use crate::printer::str_print;
@@ -307,6 +307,44 @@ pub fn dominance_frontier(doms: &Vec<Id>, alloc: &Allocator) -> Vec<FixedBitSet>
         }
     }
     df
+}
+
+pub fn stat(alloc: &Allocator) -> (
+    HashMap<Symbol, HashSet<usize>>,
+    HashMap<Symbol, Typ>,
+) {
+    let mut mp = HashMap::new();
+    let mut types = HashMap::new();
+    for id in 0..alloc.len() {
+        let content = &alloc.grab(id).content;
+        for tree in content {
+            match tree {
+                Tree::LetP(PrimStatement { exp: Some(Operand::T(
+                    ExprTree { op: Operation::Pcopy, args }
+                )), .. }) => {
+                    for i in (0..args.len()).step_by(3) {
+                        let (sym, t) = match (&args[i], &args[i+2]) {
+                            (Operand::V(sym), Operand::Tp(t)) => (*sym, *t),
+                            _ => panic!()
+                        };
+                        let id_set = mp.entry(sym).or_insert(HashSet::new());
+                        id_set.insert(id);
+                        types.insert(sym, t);
+                    }
+                },
+                Tree::LetP(p) => if let Some(pname) = p.name {
+                    let id_set = mp.entry(pname).or_insert(HashSet::new());
+                    id_set.insert(id);
+                    if p.typ != Typ::Void { types.insert(pname, p.typ); }
+                },
+                Tree::Block(_) | Tree::Switch(_) | Tree::LetI(_) | 
+                Tree::Loop(_) | Tree::If(_) | Tree::Return(_) |
+                Tree::Break(_) | Tree::Continue(_) | Tree::EntryPoint(_) => (),
+                _ => panic!("Invalid Tree Type in SSA")
+            }
+        }
+    }
+    (mp, types)
 }
 
 #[allow(unused)]

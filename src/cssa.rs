@@ -95,7 +95,7 @@ pub fn transform(alloc: &mut Allocator, sm: &mut SymbolManager) {
         }
     }
 
-    let (mp, _) = crate::ssa::stat(alloc);
+    let (mp, _) = graph::stat(alloc);
     let nodes = &mut alloc.nodes;
     let mut pred_pcopies = Vec::new();
     for id in 0..nodes.len() {
@@ -189,7 +189,7 @@ pub fn coalesce(alloc: &mut Allocator, sm: &mut SymbolManager) {
         let symlist: Vec<Symbol> = interference.data.iter().map(|(a, _)| *a).collect();
         let mut tryfuse = |a: Symbol, b: Symbol| {
             if interference.interferes(a, b, &mut value) { return }
-            println!("Coalescesing {}, {}", sm.uname(a), sm.uname(b));
+            // println!("Coalescesing {}, {}", sm.uname(a), sm.uname(b));
             interference.merge(a, b);
         };
         for (a, b) in moverelated { tryfuse(a, b); }
@@ -259,15 +259,14 @@ impl Interference {
         let (av, bv) = (vec![a], vec![b]);
         let acomp = self.equivalences.get(&a).unwrap_or(&av);
         let bcomp = self.equivalences.get(&b).unwrap_or(&bv);
-        print!("a: "); for &asym in acomp { print!("{} ", asym.id) } println!();
-        print!("b: "); for &bsym in bcomp { print!("{} ", bsym.id) } println!();
+        // print!("a: "); for &asym in acomp { print!("{} ", asym.id) } println!();
+        // print!("b: "); for &bsym in bcomp { print!("{} ", bsym.id) } println!();
         for asym in acomp {
             for bsym in bcomp {
                 if value.same(asym.id, bsym.id) {
                     continue;
                 }
                 if self.data[&asym].contains(&bsym) {
-                    println!("{} interferes with {}", asym.id, bsym.id);
                     return true;
                 }
             }
@@ -380,9 +379,9 @@ fn liveout(alloc: &mut Allocator, sm: &SymbolManager) -> Vec<HashSet<Symbol>> {
     postorder.reserve(alloc.len());
     dfs(0, &mut postorder, alloc, &mut vec![false; alloc.len()]);
     let mut live = vec![HashSet::new(); alloc.len()];
-    let used_by_block = used(alloc, sm);
+    let (used_by_block, def_by_block) = used(alloc, sm);
     // for (block, usage) in used_by_block.iter().enumerate() {
-    //     println!("block {}", block);
+    //     println!("used in block {}", block);
     //     for &item in usage {
     //         println!("-- {}", sm.uname(item));
     //     }
@@ -393,8 +392,11 @@ fn liveout(alloc: &mut Allocator, sm: &SymbolManager) -> Vec<HashSet<Symbol>> {
             let children = &alloc.grab(node).children;
             let mut new_live = HashSet::new();
             for &child in children {
-                merge(&mut new_live, &used_by_block[child]);
                 merge(&mut new_live, &live[child]);
+                for &def in &def_by_block[child] {
+                    new_live.remove(&def);
+                }
+                merge(&mut new_live, &used_by_block[child]);
             }
             if live[node] != new_live {
                 live[node] = new_live;
@@ -405,7 +407,7 @@ fn liveout(alloc: &mut Allocator, sm: &SymbolManager) -> Vec<HashSet<Symbol>> {
     }
 
     // for (block, usage) in live.iter().enumerate() {
-    //     println!("block {}", block);
+    //     println!("live out of block {}", block);
     //     for &item in usage {
     //         println!("-- {}", sm.uname(item));
     //     }
@@ -414,26 +416,51 @@ fn liveout(alloc: &mut Allocator, sm: &SymbolManager) -> Vec<HashSet<Symbol>> {
     live
 }
 
-fn used(alloc: &mut Allocator, sm: &SymbolManager) -> Vec<HashSet<Symbol>> {
-    let mut res = vec![HashSet::new(); alloc.len()];
+fn used(alloc: &mut Allocator, sm: &SymbolManager) -> (Vec<HashSet<Symbol>>, Vec<HashSet<Symbol>>) {
+    let (mp, _) = stat(alloc); // this is a stupid way to do this. do it via ith predecessor.
+    let mut uses = vec![HashSet::new(); alloc.len()];
+    let mut defs = vec![HashSet::new(); alloc.len()];
+    for node in alloc.nodes.iter() {
+        for item in node.content.iter().rev() {
+            match item {
+                Tree::LetP(PrimStatement { exp: Some(Operand::T(
+                    ExprTree { op: Operation::Phi, args })), .. }) => {
+                    for arg in &args[1..] {
+                        let sym = match arg { Operand::V(sym) => *sym, _ => panic!() };
+                        let pred = mp[&sym].iter().next().unwrap();
+                        uses[*pred].insert(sym);
+                    }
+                },
+                _ => ()
+            }
+        }
+    }
     for (i, node) in alloc.nodes.iter().enumerate() {
         for item in node.content.iter().rev() {
             match item {
+                Tree::LetP(PrimStatement { exp: Some(Operand::T(
+                    ExprTree { op: Operation::Phi, .. })), name: Some(name), .. }) => {
+                    uses[i].remove(&name);
+                    defs[i].insert(*name);
+                },
                 Tree::LetP(p) => {
-                    if let Some(e) = p.exp.as_ref() { useop(e,  &mut res[i], sm) }
-                    if let Some(n) = p.name.as_ref() { res[i].remove(n); }
+                    if let Some(e) = p.exp.as_ref() { useop(e,  &mut uses[i], sm) }
+                    if let Some(n) = p.name.as_ref() {
+                        uses[i].remove(n);
+                        defs[i].insert(*n);
+                    }
                 },
                 Tree::Block(_) | Tree::Break(_) | Tree::Continue(_) => (),
-                Tree::Switch(s) => useop(&s.arg,  &mut res[i], sm),
-                Tree::Loop(l) => useop(&l.cond,  &mut res[i], sm),
-                Tree::If(l) => useop(&l.cond,  &mut res[i], sm),
-                Tree::Return(r) => if let Some(e) = r.val.as_ref() { useop(e,  &mut res[i], sm) },
+                Tree::Switch(s) => useop(&s.arg,  &mut uses[i], sm),
+                Tree::Loop(l) => useop(&l.cond,  &mut uses[i], sm),
+                Tree::If(l) => useop(&l.cond,  &mut uses[i], sm),
+                Tree::Return(r) => if let Some(e) = r.val.as_ref() { useop(e,  &mut uses[i], sm) },
                 Tree::Try(_) => todo!(),
                 _ => panic!("Invalid node in Block")
             }
         }
     }
-    res
+    (uses, defs)
 }
 
 // I hate having to write this every time.
@@ -490,7 +517,6 @@ pub fn revert(tree: Tree, sm: &mut SymbolManager) -> Tree {
         Tree::LetF(f) => Tree::LetF({
             let (mut allocator, next_map) = graph::build(f.body);
             transform(&mut allocator, sm);
-            print_graph(&allocator.nodes, sm);
             coalesce(&mut allocator, sm);
             revert_graph(&mut allocator, sm);
             fix_declarations(&mut allocator);
