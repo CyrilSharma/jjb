@@ -134,6 +134,7 @@ pub fn coalesce(alloc: &mut Allocator, sm: &mut SymbolManager) {
     }
 
     let interf = interference(alloc, sm);
+    print_interference(&interf.data, sm);
     let mut subst = build_subst(moverelated, interf, value, sm);
     for _ in 0..10 { // I'll implement fixed point iteration one day
         for id in 0..alloc.nodes.len() {
@@ -331,7 +332,13 @@ fn interference(alloc: &mut Allocator, sm: &mut SymbolManager) -> Interference {
                     if let Some(e) = &p.exp { useop(&e, &mut cur, sm) }
                     if let Some(n) = &p.name { cur.remove(n); }
                 },
-                _ => ()
+                Tree::Block(_) | Tree::Break(_) | Tree::Continue(_) => (),
+                Tree::Switch(s) => useop(&s.arg,  &mut cur, sm),
+                Tree::Loop(l) => useop(&l.cond,  &mut cur, sm),
+                Tree::If(l) => useop(&l.cond,  &mut cur, sm),
+                Tree::Return(r) => if let Some(e) = r.val.as_ref() { useop(e,  &mut cur, sm) },
+                Tree::Try(_) => todo!(),
+                _ => panic!("Invalid node in Block")
             }
         }
     }
@@ -443,11 +450,27 @@ fn used(alloc: &mut Allocator, sm: &SymbolManager) -> (Vec<HashSet<Symbol>>, Vec
                     uses[i].remove(&name);
                     defs[i].insert(*name);
                 },
+                Tree::LetP(PrimStatement { exp: Some(Operand::T(
+                    ExprTree { args, op: Operation::Pcopy })), .. }) => {
+                    for index in (0..args.len()).step_by(3) {
+                        match (&args[index], &args[index + 1]) {
+                            (Operand::V(a), Operand::V(b)) => {
+                                uses[i].insert(*b);
+                                uses[i].remove(a);
+                                defs[i].insert(*a);
+                                // println!("defd: {}", sm.uname(*a));
+                            },
+                            _ => panic!("Invalid Pcopy!")
+                        }
+                    }
+                },
                 Tree::LetP(p) => {
                     if let Some(e) = p.exp.as_ref() { useop(e,  &mut uses[i], sm) }
                     if let Some(n) = p.name.as_ref() {
                         uses[i].remove(n);
                         defs[i].insert(*n);
+                        // println!("defd: {}", sm.uname(*n));
+                        // TING
                     }
                 },
                 Tree::Block(_) | Tree::Break(_) | Tree::Continue(_) => (),
@@ -469,20 +492,6 @@ fn useop(e: &Operand, mp: &mut HashSet<Symbol>, sm: &SymbolManager) {
         Operand::This(_) | Operand::Super(_) |
         Operand::C(_) | Operand::Tp(_) => (),
         Operand::V(sym) => { mp.insert(*sym); },
-        Operand::T(ExprTree { args, op: Operation::Pcopy }) => {
-            for i in (0..args.len()).step_by(3) {
-                match (&args[i], &args[i+1]) {
-                    (Operand::V(a), Operand::V(b)) => {
-                        mp.insert(*b);
-                        mp.remove(a);
-                    },
-                    _ => panic!("Invalid Pcopy!")
-                }
-            }
-        },
-        Operand::T(ExprTree { args, op: Operation::Phi }) => {
-            args[1..].iter().for_each(|e| useop(e, mp, sm))
-        },
         Operand::T(ExprTree { args, op: Operation::New }) => {
             args[1..].iter().for_each(|e| useop(e, mp, sm))
         }
@@ -778,9 +787,7 @@ mod test {
         class Test {
             public static void main(String[] args) {
                 int count = 0;
-                do {
-                    count++;
-                } while (count < 100);
+                while (count++ < 10) {}
                 System.out.println(count);
             }
           }
