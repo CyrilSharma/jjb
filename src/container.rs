@@ -1,5 +1,8 @@
 use std::{collections::LinkedList, ops::Add};
 
+// TF? Why didn't I just make Container<T>
+// Be equivalent to LinkedList<T>...
+// I'm nuking all this code later.
 #[derive(Clone)]
 pub struct Container<T> {
     pub container: LinkedList<T>
