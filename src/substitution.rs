@@ -1,15 +1,17 @@
 use std::collections::HashMap;
-use std::hash::Hash;
 use std::fmt::Debug;
+use std::hash::Hash;
 
 #[derive(Clone)]
 pub struct Substitution<T: Eq + PartialEq + Hash + Copy + Debug> {
-    map: HashMap<T, T>
+    map: HashMap<T, T>,
 }
 
 impl<T: Eq + PartialEq + Hash + Copy + Debug> Substitution<T> {
     pub fn new() -> Self {
-        Self { map: HashMap::new() }
+        Self {
+            map: HashMap::new(),
+        }
     }
 
     pub fn add_subst(&mut self, a: T, b: T) {
@@ -27,7 +29,9 @@ impl<T: Eq + PartialEq + Hash + Copy + Debug> Substitution<T> {
     pub fn bake(&mut self) {
         let mut baked = HashMap::new();
         for (&key, _) in &self.map {
-            if baked.contains_key(&key) { continue }
+            if baked.contains_key(&key) {
+                continue;
+            }
             Self::bake_entry(key, &mut baked, &self.map);
         }
         self.map = baked;

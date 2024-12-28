@@ -5,14 +5,16 @@ use std::{collections::LinkedList, ops::Add};
 // I'm nuking all this code later.
 #[derive(Clone)]
 pub struct Container<T> {
-    pub container: LinkedList<T>
+    pub container: LinkedList<T>,
 }
 
 // This was supposed to be done so I could swap out the underlying container,
 // But it might've been easier to just implement Operations on a type.
 impl<T> Container<T> {
     pub fn new() -> Self {
-        Self { container: LinkedList::new() }
+        Self {
+            container: LinkedList::new(),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -54,7 +56,9 @@ impl<T> Container<T> {
     }
 
     pub fn retain<F>(&mut self, mut f: F)
-        where F: FnMut(&mut T) -> bool {
+    where
+        F: FnMut(&mut T) -> bool,
+    {
         let mut new_container = LinkedList::new();
         while let Some(mut item) = self.container.pop_front() {
             if f(&mut item) {
@@ -133,7 +137,7 @@ impl<T> IntoIterator for Container<T> {
 
     fn into_iter(self) -> Self::IntoIter {
         ContainerIntoIter {
-            current: Some(self.container.into_iter())
+            current: Some(self.container.into_iter()),
         }
     }
 }
@@ -143,7 +147,9 @@ impl<T> Add for Container<T> {
     fn add(self, mut other: Self) -> Self {
         let mut new_container = self.container;
         new_container.append(&mut other.container);
-        Self { container: new_container }
+        Self {
+            container: new_container,
+        }
     }
 }
 
@@ -174,13 +180,11 @@ impl<'a, T> IntoIterator for &'a mut Container<T> {
     }
 }
 
-
 impl<'a, T> DoubleEndedIterator for ContainerIter<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         self.iter.next_back()
     }
 }
-
 
 impl<'a, T> DoubleEndedIterator for ContainerIterMut<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {

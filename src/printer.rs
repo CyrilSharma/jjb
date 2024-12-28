@@ -1,14 +1,18 @@
-use std::borrow::Cow;
 use crate::ir::*;
 use crate::parameters::Parameters;
 use crate::symbolmanager::{Symbol, SymbolManager};
+use std::borrow::Cow;
 use std::io::{self, Write};
 
 #[allow(dead_code)]
 pub fn print(tree: &Tree, sm: &SymbolManager) {
     let stdout = io::stdout();
     let handle = stdout.lock();
-    let mut state = PrintState { level: 0, sm, buf: handle };
+    let mut state = PrintState {
+        level: 0,
+        sm,
+        buf: handle,
+    };
     print_tree(tree, &mut state);
 }
 
@@ -28,17 +32,20 @@ pub fn buf_print(tree: &Tree, sm: &SymbolManager, buf: &mut Vec<u8>) {
 struct PrintState<'l, W: Write> {
     level: u32,
     sm: &'l SymbolManager,
-    buf: W
+    buf: W,
 }
 
 impl<'l, W: Write> PrintState<'l, W> {
-    fn uname(&self, sym: Symbol) -> String { self.sm.uname(sym) }
+    fn uname(&self, sym: Symbol) -> String {
+        self.sm.uname(sym)
+    }
     fn println(&mut self, text: &str) {
-        writeln!(self.buf, "{}{}", "  ".repeat(self.level as usize), text)
-            .expect("Write failed!")
+        writeln!(self.buf, "{}{}", "  ".repeat(self.level as usize), text).expect("Write failed!")
     }
     fn indent<F>(&mut self, f: F)
-        where F: FnOnce(&mut PrintState<W>) {
+    where
+        F: FnOnce(&mut PrintState<W>),
+    {
         self.level += 1;
         f(self);
         self.level -= 1;
@@ -50,32 +57,51 @@ fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
         Tree::Program(stmts) => stmts.iter().for_each(|s| print_tree(s, state)),
         Tree::LetI(ImportDeclaration { path }) => {
             state.println(&format!("import {};", path));
-        },
+        }
         // Typ name;
         // Typ name = value;
         // name = value;
         // value;
         Tree::LetP(PrimStatement { name, typ, exp }) => {
             let header = match (typ, name, exp) {
-                (Typ::Void, Some(n), Some(e)) => format!("{} = {};", state.uname(*n), serialize_op(e, state)),
+                (Typ::Void, Some(n), Some(e)) => {
+                    format!("{} = {};", state.uname(*n), serialize_op(e, state))
+                }
                 (Typ::Void, None, Some(e)) => format!("{};", serialize_op(e, state)),
                 (t, Some(n), None) => format!("{} {};", serialize_tp(t, state), state.uname(*n)),
-                (t, Some(n), Some(e)) => format!("{} {} = {};", serialize_tp(t, state), state.uname(*n), serialize_op(e, state)),
-                _ => panic!("Invalid Prim Statement")
+                (t, Some(n), Some(e)) => format!(
+                    "{} {} = {};",
+                    serialize_tp(t, state),
+                    state.uname(*n),
+                    serialize_op(e, state)
+                ),
+                _ => panic!("Invalid Prim Statement"),
             };
             state.println(&header);
-        },
-        Tree::LetF(FunDeclaration { name, args, modifiers, throws, return_typ, body, constructor }) => {
+        }
+        Tree::LetF(FunDeclaration {
+            name,
+            args,
+            modifiers,
+            throws,
+            return_typ,
+            body,
+            constructor,
+        }) => {
             let mut header = modifiers.join(" ");
-            if modifiers.len() != 0 { header.push_str(" ") }
-            if !constructor { header.push_str(&format!("{} ", serialize_tp(return_typ, state))); }
-            header.push_str(&format!("{}({})",
+            if modifiers.len() != 0 {
+                header.push_str(" ")
+            }
+            if !constructor {
+                header.push_str(&format!("{} ", serialize_tp(return_typ, state)));
+            }
+            header.push_str(&format!(
+                "{}({})",
                 state.uname(*name),
-                args.iter().map(|(sym, typ)|
-                    format!("{} {}", serialize_tp(typ, state), state.uname(*sym)))
+                args.iter()
+                    .map(|(sym, typ)| format!("{} {}", serialize_tp(typ, state), state.uname(*sym)))
                     .collect::<Vec<_>>()
                     .join(", ")
-                    
             ));
             if throws.len() != 0 {
                 header.push_str(" throws ");
@@ -84,8 +110,13 @@ fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
             state.println(&format!("{} {{", header));
             body.iter().for_each(|b| state.indent(|s| print_tree(b, s)));
             state.println("}");
-        },
-        Tree::LetC(ClassDeclaration { name, members, methods, extends }) => {
+        }
+        Tree::LetC(ClassDeclaration {
+            name,
+            members,
+            methods,
+            extends,
+        }) => {
             let mut header = "".to_string();
             // if state.params.entry_class == state.sm.name(*name) { header.push_str("public ") }
             header.push_str(&format!("class {}", state.uname(*name)));
@@ -95,54 +126,79 @@ fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
             state.println(&format!("{} {{", header));
             for (sym, tp) in members {
                 let tp = serialize_tp(tp, state);
-                state.indent(|state| state.println(&format!("{} {};",
-                    tp, state.uname(*sym)),
-                ));
+                state.indent(|state| state.println(&format!("{} {};", tp, state.uname(*sym))));
             }
-            methods.iter().for_each(|method| state.indent(|state| print_tree(method, state)));
+            methods
+                .iter()
+                .for_each(|method| state.indent(|state| print_tree(method, state)));
             state.println("}");
-        },
+        }
         Tree::LetE(_) => todo!(),
-        Tree::Switch(SwitchStatement { arg, cases, default, label }) =>  {
+        Tree::Switch(SwitchStatement {
+            arg,
+            cases,
+            default,
+            label,
+        }) => {
             let op = serialize_op(arg, state);
-            state.println(&format!("{}: switch ({}) {{",
-                state.uname(*label), op
-            ));
+            state.println(&format!("{}: switch ({}) {{", state.uname(*label), op));
             state.indent(|state| {
                 for (ops, tree) in cases {
                     for op in ops {
                         let sop = serialize_op(op, state);
                         state.println(&format!("case {}: ", sop));
                     }
-                    state.indent(|state| tree.iter().for_each(
-                        |s| { print_tree(s, state); }
-                    ));
+                    state.indent(|state| {
+                        tree.iter().for_each(|s| {
+                            print_tree(s, state);
+                        })
+                    });
                 }
                 state.println("default: ");
-                default.iter().for_each(|d| state.indent(|state| print_tree(d, state)));
+                default
+                    .iter()
+                    .for_each(|d| state.indent(|state| print_tree(d, state)));
             });
             state.println("}");
-        },
-        Tree::Loop(LoopStatement { cond, lbody, label, dowhile }) => {
-            let sop = serialize_op(cond, state);
-            if *dowhile { state.println(&format!("{}: do {{", state.uname(*label))); } 
-            else { state.println(&format!("{}: while ({}) {{", state.uname(*label), sop));}
-            lbody.iter().for_each(|t| state.indent(|state| print_tree(t, state)));
-            if *dowhile { state.println(&format!("}} while ({});", sop)); } 
-            else { state.println("}"); }
         }
-        Tree::If(IfStatement { cond, btrue, bfalse, label }) => {
+        Tree::Loop(LoopStatement {
+            cond,
+            lbody,
+            label,
+            dowhile,
+        }) => {
+            let sop = serialize_op(cond, state);
+            if *dowhile {
+                state.println(&format!("{}: do {{", state.uname(*label)));
+            } else {
+                state.println(&format!("{}: while ({}) {{", state.uname(*label), sop));
+            }
+            lbody
+                .iter()
+                .for_each(|t| state.indent(|state| print_tree(t, state)));
+            if *dowhile {
+                state.println(&format!("}} while ({});", sop));
+            } else {
+                state.println("}");
+            }
+        }
+        Tree::If(IfStatement {
+            cond,
+            btrue,
+            bfalse,
+            label,
+        }) => {
             let op = serialize_op(cond, state);
-            state.println(&format!("{}: if ({}) {{",
-                state.uname(*label), op
-            ));
+            state.println(&format!("{}: if ({}) {{", state.uname(*label), op));
             state.indent(|state| btrue.iter().for_each(|t| print_tree(t, state)));
             if bfalse.len() != 0 {
                 state.println("} else {");
-                bfalse.iter().for_each(|x| state.indent(|state| print_tree(x, state)));
+                bfalse
+                    .iter()
+                    .for_each(|x| state.indent(|state| print_tree(x, state)));
             }
             state.println("}");
-        },
+        }
         Tree::Try(_) => todo!(),
         Tree::Return(ReturnStatement { val }) => {
             if let Some(v) = val.as_ref() {
@@ -151,27 +207,33 @@ fn print_tree(tree: &Tree, state: &mut PrintState<'_, impl Write>) {
             } else {
                 state.println("return;");
             }
-        },
-        Tree::EntryPoint(sym) => state.println(
-            &format!("// {}();", state.uname(*sym))
-        ),
+        }
+        Tree::EntryPoint(sym) => state.println(&format!("// {}();", state.uname(*sym))),
         Tree::Block(BlockStatement { label, bbody }) => {
             let mut buf = format!("{}: ", state.uname(*label));
             buf += "{";
             state.println(&buf);
-            bbody.iter().for_each(|t| state.indent(|state| print_tree(t, state)));
+            bbody
+                .iter()
+                .for_each(|t| state.indent(|state| print_tree(t, state)));
             state.println("}");
-        },
+        }
         Tree::Continue(sym) => state.println(&format!("continue {};", state.uname(*sym))),
-        Tree::Break(sym) => state.println(&format!("break {};", state.uname(*sym)))
+        Tree::Break(sym) => state.println(&format!("break {};", state.uname(*sym))),
     }
 }
 
-fn serialize_array_initializer(ops: &ArrayInitializer, state: &mut PrintState<'_, impl Write>) -> String {
-    let exp = ops.iter().map(|item| match item.as_ref() {
-        ElementInitializer::Expr(exp) => serialize_op(exp, state),
-        ElementInitializer::ArrayInitializer(a) => serialize_array_initializer(a, state)
-    }).collect::<Vec<_>>()
+fn serialize_array_initializer(
+    ops: &ArrayInitializer,
+    state: &mut PrintState<'_, impl Write>,
+) -> String {
+    let exp = ops
+        .iter()
+        .map(|item| match item.as_ref() {
+            ElementInitializer::Expr(exp) => serialize_op(exp, state),
+            ElementInitializer::ArrayInitializer(a) => serialize_array_initializer(a, state),
+        })
+        .collect::<Vec<_>>()
         .join(", ");
     format!("{{ {} }}", exp)
 }
@@ -187,50 +249,60 @@ fn serialize_op(op: &Operand, state: &mut PrintState<'_, impl Write>) -> String 
         Operand::T(ExprTree { op, args }) => {
             use Operation::*;
             match op {
-                Add | Sub | Mul | Div | Mod |
-                Set | PSet | SSet | MSet | DSet | ModSet |
-                AndSet | OrSet | XorSet | ShrSet |
-                UshrSet | ShlSet | Eq | Neq | G | L |
-                GEq | LEq | LAnd | LOr | LNot | Shl |
-                Shr | UShr | And | Or | Xor | InstanceOf
-                if args.len() == 2 => format!("({}) {} ({})",
+                Add | Sub | Mul | Div | Mod | Set | PSet | SSet | MSet | DSet | ModSet | AndSet
+                | OrSet | XorSet | ShrSet | UshrSet | ShlSet | Eq | Neq | G | L | GEq | LEq
+                | LAnd | LOr | LNot | Shl | Shr | UShr | And | Or | Xor | InstanceOf
+                    if args.len() == 2 =>
+                {
+                    format!(
+                        "({}) {} ({})",
+                        serialize_op(&args[0], state),
+                        serialize_operator(*op),
+                        serialize_op(&args[1], state)
+                    )
+                }
+                PreInc | PreDec | Not | LNot | Sub if args.len() == 1 => format!(
+                    "{}({})",
+                    serialize_operator(*op),
+                    serialize_op(&args[0], state),
+                ),
+                PostInc | PostDec if args.len() == 1 => format!(
+                    "({}){}",
                     serialize_op(&args[0], state),
                     serialize_operator(*op),
-                    serialize_op(&args[1], state)
                 ),
-                PreInc | PreDec | Not | LNot | Sub if args.len() == 1 => format!("{}({})",
-                    serialize_operator(*op),
-                    serialize_op(&args[0], state),
-                ),
-                PostInc | PostDec if args.len() == 1 => format!("({}){}",
-                    serialize_op(&args[0], state),
-                    serialize_operator(*op),
-                ),
-                Ternary if args.len() == 3 => format!("({}) ? ({}) : ({})",
+                Ternary if args.len() == 3 => format!(
+                    "({}) ? ({}) : ({})",
                     serialize_op(&args[0], state),
                     serialize_op(&args[1], state),
                     serialize_op(&args[2], state),
                 ),
-                Assert if args.len() == 2 => format!("assert ({}):({})",
+                Assert if args.len() == 2 => format!(
+                    "assert ({}):({})",
                     serialize_op(&args[0], state),
                     serialize_op(&args[1], state),
                 ),
-                Assert if args.len() == 1 => format!("assert ({}):({})",
+                Assert if args.len() == 1 => format!(
+                    "assert ({}):({})",
                     serialize_op(&args[0], state),
                     serialize_op(&args[1], state),
                 ),
-                New if args.len() > 1 => format!("new {}({})", 
+                New if args.len() > 1 => format!(
+                    "new {}({})",
                     serialize_op(&args[0], state),
-                    args[1..].iter()
+                    args[1..]
+                        .iter()
                         .map(|arg| serialize_op(arg, state))
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
                 ArrayNew if args.len() == 2 => serialize_array(&args[0], &args[1], state),
-                InvokeVirtual | InvokeVirtual if args.len() >= 2 => format!("{}.{}({})",
+                InvokeVirtual | InvokeVirtual if args.len() >= 2 => format!(
+                    "{}.{}({})",
                     serialize_op(&args[0], state),
                     serialize_op(&args[1], state),
-                    args[2..].iter()
+                    args[2..]
+                        .iter()
                         .map(|arg| serialize_op(arg, state))
                         .collect::<Vec<_>>()
                         .join(", ")
@@ -239,57 +311,86 @@ fn serialize_op(op: &Operand, state: &mut PrintState<'_, impl Write>) -> String 
                     let mut res = String::new();
                     let mut i = 0;
                     while i < args.len() {
-                        res.push_str(&format!("{} = {}, ",
+                        res.push_str(&format!(
+                            "{} = {}, ",
                             serialize_op(&args[i], state),
-                            serialize_op(&args[i+1], state)));
+                            serialize_op(&args[i + 1], state)
+                        ));
                         i += 3;
                     }
-                    if res.len() >= 2 { res.pop(); res.pop(); }
+                    if res.len() >= 2 {
+                        res.pop();
+                        res.pop();
+                    }
                     res
                 }),
-                Phi => format!("Phi({})",
+                Phi => format!(
+                    "Phi({})",
                     args.iter()
                         .map(|arg| serialize_op(arg, state))
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
-                Access if args.len() == 2 => format!("{}.{}",
+                Access if args.len() == 2 => format!(
+                    "{}.{}",
                     serialize_op(&args[0], state),
                     serialize_op(&args[1], state)
                 ),
-                Index if args.len() == 2 => format!("({})[{}]",
+                Index if args.len() == 2 => format!(
+                    "({})[{}]",
                     serialize_op(&args[0], state),
                     serialize_op(&args[1], state)
                 ),
                 operator => panic!(
                     "Unhandled Operator {} with nargs: {}",
-                    serialize_operator(*operator), args.len()
-                )
+                    serialize_operator(*operator),
+                    args.len()
+                ),
             }
         }
     }
 }
 
-fn serialize_array(optyp: &Operand, op: &Operand, state: &mut PrintState<'_, impl Write>) -> String {
-    let asym = if let Operand::Tp(Typ::Array(asym)) = optyp { asym } else { panic!("Unknown Array Type!") };
-    let array = if let Operand::A(array) = op { array } else { panic!("Unknown Array Op") };
-    let (eltype, dims) = if let Some(ArrayTyp { eltype, dims }) = state.sm.arraytyp(*asym)
-        { (eltype, dims) } else { panic!("Invalid Array") };
+fn serialize_array(
+    optyp: &Operand,
+    op: &Operand,
+    state: &mut PrintState<'_, impl Write>,
+) -> String {
+    let asym = if let Operand::Tp(Typ::Array(asym)) = optyp {
+        asym
+    } else {
+        panic!("Unknown Array Type!")
+    };
+    let array = if let Operand::A(array) = op {
+        array
+    } else {
+        panic!("Unknown Array Op")
+    };
+    let (eltype, dims) = if let Some(ArrayTyp { eltype, dims }) = state.sm.arraytyp(*asym) {
+        (eltype, dims)
+    } else {
+        panic!("Invalid Array")
+    };
     match array {
         ArrayExpression::Empty(aempty_box) => {
             let ops = aempty_box.as_ref();
-            let exp = ops.iter().map(|item| format!("[{}]", serialize_op(item, state)))
+            let exp = ops
+                .iter()
+                .map(|item| format!("[{}]", serialize_op(item, state)))
                 .collect::<Vec<_>>()
                 .join("");
             format!(
-                "new {}{}{}", serialize_tp(&eltype, state), exp,
+                "new {}{}{}",
+                serialize_tp(&eltype, state),
+                exp,
                 "[]".repeat((*dims as usize) - ops.len())
             )
         }
-        ArrayExpression::Initializer(initial_box) => format!("new {}{}",
+        ArrayExpression::Initializer(initial_box) => format!(
+            "new {}{}",
             serialize_tp(&Typ::Array(*asym), state),
             serialize_array_initializer(initial_box.as_ref(), state)
-        )
+        ),
     }
 }
 
@@ -307,7 +408,7 @@ fn serialize_operator(operator: Operation) -> &'static str {
         PostDec => "--",
         Set => "=",
         PSet => "+=",
-        SSet => "-=", 
+        SSet => "-=",
         MSet => "*=",
         DSet => "/=",
         ModSet => "%=",
@@ -348,13 +449,12 @@ fn serialize_operator(operator: Operation) -> &'static str {
         InvokeStatic => "invoke_static",
         InvokeVirtual => "invoke_virtual",
     }
-
 }
 
 fn serialize_tp(tp: &Typ, state: &mut PrintState<'_, impl Write>) -> Cow<'static, str> {
-    use Typ as T;
     use Cow::Borrowed as B;
     use Cow::Owned as O;
+    use Typ as T;
     match tp {
         T::Unknown => B("unknown"),
         T::Void => B("void"),
@@ -369,12 +469,15 @@ fn serialize_tp(tp: &Typ, state: &mut PrintState<'_, impl Write>) -> Cow<'static
         T::Str => B("String"),
         T::Array(asym) => {
             if let Some(ArrayTyp { eltype, dims }) = state.sm.arraytyp(*asym) {
-                O(format!("{}{}", serialize_tp(eltype, state),
-                    "[]".repeat(*dims as usize)))
+                O(format!(
+                    "{}{}",
+                    serialize_tp(eltype, state),
+                    "[]".repeat(*dims as usize)
+                ))
             } else {
                 panic!("Unknown ArrayType")
             }
-        },
-        T::Class(s) => O(state.uname(*s))
+        }
+        T::Class(s) => O(state.uname(*s)),
     }
 }

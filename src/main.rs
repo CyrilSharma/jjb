@@ -1,30 +1,30 @@
-mod ir;
-mod cssa;
-mod converter;
-mod tsretriever;
-mod scope;
-mod printer;
-mod symbolmanager;
-mod directory;
-mod hoist;
 mod container;
-mod typeinfer;
-mod optimizer;
-mod substitution;
-mod parameters;
-mod ssa;
+mod converter;
+mod cssa;
+mod directory;
+mod dsu;
 mod flatten;
 mod graph;
-mod dsu;
+mod hoist;
+mod ir;
 mod linker;
+mod optimizer;
+mod parameters;
+mod printer;
+mod scope;
+mod ssa;
+mod substitution;
+mod symbolmanager;
+mod tsretriever;
+mod typeinfer;
 
-use printer::str_print;
-use typeinfer::typeinfer;
-use hoist::hoist;
 use converter::convert;
-use symbolmanager::SymbolManager;
-use parameters::Parameters;
+use hoist::hoist;
 use optimizer::optimize;
+use parameters::Parameters;
+use printer::str_print;
+use symbolmanager::SymbolManager;
+use typeinfer::typeinfer;
 
 use clap::Parser;
 use std::fs::File;
@@ -60,23 +60,28 @@ struct Args {
 
     /// The name of the output file.
     #[arg(long, required = true)]
-    output_file: String
+    output_file: String,
 }
 
-fn main() {    
+fn main() {
     let args = Args::parse();
     let mut java_parser = tree_sitter::Parser::new();
-    java_parser.set_language(&tree_sitter_java::language())
-               .expect("Error loading Java grammar");
+    java_parser
+        .set_language(&tree_sitter_java::language())
+        .expect("Error loading Java grammar");
 
     let mut fused_ast: Option<ir::Tree> = None;
     let mut sm = SymbolManager::new();
-    let params = Parameters { entry_class: args.entry_class, entry_name: args.entry_name };
+    let params = Parameters {
+        entry_class: args.entry_class,
+        entry_name: args.entry_name,
+    };
     for file in args.input_files {
         match read_file(&file) {
             Ok(content) => {
-                let tree = java_parser.parse(&content, None)
-                                      .unwrap_or_else(|| panic!("Failed to parse {}", file));
+                let tree = java_parser
+                    .parse(&content, None)
+                    .unwrap_or_else(|| panic!("Failed to parse {}", file));
                 let ast = convert(tree.root_node(), content.as_bytes(), &params, &mut sm);
                 fused_ast = Some(if let Some(existing_ast) = fused_ast {
                     linker::link(existing_ast, *ast)
@@ -84,7 +89,7 @@ fn main() {
                     *ast
                 });
             }
-            Err(e) => eprintln!("Error reading file {}: {}", file, e)
+            Err(e) => eprintln!("Error reading file {}: {}", file, e),
         }
     }
 

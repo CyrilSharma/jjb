@@ -1,18 +1,22 @@
-use std::collections::HashMap;
 use crate::symbolmanager::Symbol;
+use std::collections::HashMap;
 
 pub struct Scope<'l> {
-    table: Vec<HashMap<&'l str, Symbol>>
+    table: Vec<HashMap<&'l str, Symbol>>,
 }
 
 impl<'l> Scope<'l> {
-    pub fn new() -> Self { Self { table: vec![HashMap::new()] } }
+    pub fn new() -> Self {
+        Self {
+            table: vec![HashMap::new()],
+        }
+    }
     pub fn find(&self, name: &'l str) -> Option<Symbol> {
         for cur in (0..self.table.len()).rev() {
             if let Some(res) = self.table[cur].get(name) {
                 return Some(*res);
             }
-        } 
+        }
         None
     }
 

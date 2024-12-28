@@ -1,13 +1,13 @@
 // https://github.com/tree-sitter/tree-sitter-java/blob/master/grammar.js
 // We parse a subset of the above grammar.
 
-use std::collections::HashMap;
 use crate::directory::Directory;
 use crate::ir::*;
+use crate::parameters::Parameters;
+use crate::scope::Scope;
 use crate::symbolmanager::{Symbol, SymbolManager};
 use crate::tsretriever::TsRetriever;
-use crate::scope::Scope;
-use crate::parameters::Parameters;
+use std::collections::HashMap;
 use tree_sitter::Node;
 
 struct State<'l> {
@@ -21,7 +21,7 @@ struct State<'l> {
     break_label: Option<Symbol>,
     continue_label: Option<Symbol>,
     label: Option<Symbol>,
-    sm: &'l mut SymbolManager
+    sm: &'l mut SymbolManager,
 }
 
 impl<'l> State<'l> {
@@ -37,17 +37,15 @@ impl<'l> State<'l> {
             break_label: None,
             continue_label: None,
             label: None,
-            sm
+            sm,
         }
     }
-
-    
 
     pub fn push_continue_label(&mut self, label: Symbol) -> Option<Symbol> {
         let res = self.continue_label;
         self.continue_label = Some(label);
         res
-    }   
+    }
 
     pub fn restore_continue_label(&mut self, label: Option<Symbol>) {
         self.continue_label = label;
@@ -57,7 +55,7 @@ impl<'l> State<'l> {
         let res = self.break_label;
         self.break_label = Some(label);
         res
-    }  
+    }
 
     pub fn restore_break_label(&mut self, label: Option<Symbol>) {
         self.break_label = label;
@@ -72,9 +70,11 @@ impl<'l> State<'l> {
     pub fn find_label(&self, name: &'l str) -> Option<Symbol> {
         for i in (0..self.label_stk.len()).rev() {
             let (cname, csym) = self.label_stk[i];
-            if cname == name { return Some(csym) }
+            if cname == name {
+                return Some(csym);
+            }
         }
-        return None
+        return None;
     }
 
     pub fn get_typ(&mut self, node: &Node) -> Typ {
@@ -91,32 +91,35 @@ impl<'l> State<'l> {
                 "int" => Typ::Int,
                 "long" => Typ::Long,
                 "char" => Typ::Char,
-                other => panic!("integral_type: {}", other)
-            }
+                other => panic!("integral_type: {}", other),
+            },
             "boolean_type" => Typ::Bool,
             "floating_point_type" => match self.tsret.get_text(&typ_node) {
                 "float" => Typ::Float,
                 "double" => Typ::Double,
-                other => panic!("floating_point_type: {}", other)
-            }
+                other => panic!("floating_point_type: {}", other),
+            },
 
             "array_type" => {
                 let eltype = self.get_typ_raw(&self.tsret.get_field(&typ_node, "element"));
-                let dims = self.tsret.get_dims(
-                    &self.tsret.get_field(&typ_node, "dimensions")
-                );
+                let dims = self
+                    .tsret
+                    .get_dims(&self.tsret.get_field(&typ_node, "dimensions"));
                 Typ::Array(self.sm.fresh_array(ArrayTyp { eltype, dims }))
-            },
+            }
 
             "type_identifier" => {
                 let name = self.tsret.get_text(&typ_node);
-                if name == "String" { return Typ::Str }
-                Typ::Class(self.class_scope
-                    .find(name)
-                    .expect(&format!("Unknown Class Type {}", name))
+                if name == "String" {
+                    return Typ::Str;
+                }
+                Typ::Class(
+                    self.class_scope
+                        .find(name)
+                        .expect(&format!("Unknown Class Type {}", name)),
                 )
-            },
-            other => panic!("Unknown Class Type {}", other)
+            }
+            other => panic!("Unknown Class Type {}", other),
         }
     }
 
@@ -131,7 +134,12 @@ impl<'l> State<'l> {
     }
 }
 
-pub fn convert(root: Node, source: &[u8], params: &Parameters, sm: &mut SymbolManager) -> Box<Tree> {
+pub fn convert(
+    root: Node,
+    source: &[u8],
+    params: &Parameters,
+    sm: &mut SymbolManager,
+) -> Box<Tree> {
     assert!(root.kind() == "program");
     let mut state = State::new(source, sm);
     let entry_sym = add_declarations(root, &mut state, &params.entry_name, &params.entry_class);
@@ -141,12 +149,19 @@ pub fn convert(root: Node, source: &[u8], params: &Parameters, sm: &mut SymbolMa
 }
 
 // TODO: support for enums!
-fn add_declarations<'l>(root: Node, state: &mut State, entry_name: &'l str, entry_class: &'l str) -> Symbol {
+fn add_declarations<'l>(
+    root: Node,
+    state: &mut State,
+    entry_name: &'l str,
+    entry_class: &'l str,
+) -> Symbol {
     let mut entry_sym = None;
     let mut cursor = root.walk();
     let mut csyms = Vec::new();
     for top in root.named_children(&mut cursor) {
-        if top.kind() != "class_declaration" { continue }
+        if top.kind() != "class_declaration" {
+            continue;
+        }
         let cname = state.tsret.get_field_text(&top, "name");
         let csym = state.sm.fresh_reserved(cname);
         state.class_scope.insert(cname, csym);
@@ -156,7 +171,9 @@ fn add_declarations<'l>(root: Node, state: &mut State, entry_name: &'l str, entr
 
     let mut index = 0;
     for top in root.named_children(&mut cursor) {
-        if top.kind() != "class_declaration" { continue }
+        if top.kind() != "class_declaration" {
+            continue;
+        }
         let csym = csyms[index];
         let cname = state.sm.name(csym).to_owned();
         index += 1;
@@ -166,26 +183,30 @@ fn add_declarations<'l>(root: Node, state: &mut State, entry_name: &'l str, entr
         let mut typed_members = Vec::new();
         let body = state.tsret.get_field(&top, "body");
         let mut bcursor = body.walk();
-        for child in body.named_children(&mut bcursor) { 
+        for child in body.named_children(&mut bcursor) {
             match child.kind() {
                 "class_declatation" => panic!("Inner classes are not supported!"),
                 "enum_declaration" => panic!("Inner enums are not supported!"),
                 "method_declaration" | "constructor_declaration" => {
                     let fname = state.tsret.get_field_text(&child, "name");
                     let constructor = child.kind() == "constructor_declaration";
-                    let reservecond = (fname == entry_name) || (cname == entry_class) || (constructor);
-                    let fsym = if reservecond { state.sm.fresh_reserved(fname) }
-                               else { state.sm.fresh(fname) };
-                    if fname == entry_name && cname == entry_class { entry_sym = Some(fsym) }
+                    let reservecond =
+                        (fname == entry_name) || (cname == entry_class) || (constructor);
+                    let fsym = if reservecond {
+                        state.sm.fresh_reserved(fname)
+                    } else {
+                        state.sm.fresh(fname)
+                    };
+                    if fname == entry_name && cname == entry_class {
+                        entry_sym = Some(fsym)
+                    }
                     let type_child = child.child_by_field_name("type");
-                    let rtyp = type_child.map_or_else(
-                        || Typ::Class(csym),
-                        |x| state.get_typ_raw(&x)
-                    );
+                    let rtyp =
+                        type_child.map_or_else(|| Typ::Class(csym), |x| state.get_typ_raw(&x));
                     state.type_map.insert(fsym, rtyp);
-                    methods.insert(fname, fsym).map(
-                        |_| panic!("method {} appears more then once", fname)
-                    );
+                    methods
+                        .insert(fname, fsym)
+                        .map(|_| panic!("method {} appears more then once", fname));
                 }
                 "field_declaration" => {
                     let typ = state.get_typ(&child);
@@ -193,15 +214,20 @@ fn add_declarations<'l>(root: Node, state: &mut State, entry_name: &'l str, entr
                     let name = state.tsret.get_field_text(&declarator, "name");
                     let var_sym = state.sm.fresh(name);
                     state.type_map.insert(var_sym, typ);
-                    members.insert(name, var_sym).map(
-                        |_| panic!("member {} appears more then once", name)
-                    );
+                    members
+                        .insert(name, var_sym)
+                        .map(|_| panic!("member {} appears more then once", name));
                     typed_members.push((var_sym, typ));
-                },
-                other => panic!("Parse Tree uses unknown node {}\n", other)
+                }
+                other => panic!("Parse Tree uses unknown node {}\n", other),
             }
         }
-        state.sm.add_class(csym, ClassTyp { members: typed_members });
+        state.sm.add_class(
+            csym,
+            ClassTyp {
+                members: typed_members,
+            },
+        );
         state.directory.add_class(csym, methods, members);
     }
     entry_sym.expect("The entry symbol was not found!")
@@ -217,7 +243,7 @@ fn statements(node: Node, state: &mut State) -> TreeContainer {
             continue;
         }
         break;
-    } 
+    }
     res
 }
 
@@ -226,7 +252,7 @@ fn tail(mut container: TreeContainer, el: Tree) -> TreeContainer {
     if let Some(t) = container.back() {
         match t {
             Return(_) | Break(_) | Continue(_) => return container,
-            _ => ()
+            _ => (),
         }
     }
     container.push_back(el);
@@ -239,11 +265,11 @@ fn statement(node: Node, state: &mut State) -> TreeContainer {
     match node.kind() {
         /* ------ TOP-LEVEL DECLARATIONS -------- */
         "module_declaration" => panic!("Modules are not supported!"),
-        "package_declaration" => empty /* packages are inlined */,
+        "package_declaration" => empty, /* packages are inlined */
         "import_declaration" => import_declaration(node, state),
         "class_declaration" => class_declaration(node, state),
         "record_declaration" => panic!("Records are not supported!"),
-        "interface_declaration" => empty /* interfaces are basically just type asserts */,
+        "interface_declaration" => empty, /* interfaces are basically just type asserts */
         "annotation_type_declaration" => panic!("Annotations are not supported!"),
         "enum_declaration" => enum_declaration(node, state),
 
@@ -260,48 +286,64 @@ fn statement(node: Node, state: &mut State) -> TreeContainer {
         "do_statement" => while_statement(node, state, true),
         "break_statement" => break_statement(node, state),
         "continue_statement" => continue_statement(node, state),
-        "return_statement" => TreeContainer::make(Tree::Return(ReturnStatement { 
-            val: node.named_child(0).map(|child| expression(child, state))
+        "return_statement" => TreeContainer::make(Tree::Return(ReturnStatement {
+            val: node.named_child(0).map(|child| expression(child, state)),
         })),
         "yield_statement" => panic!("Yield is unsupported!"),
         "switch_expression" => switch_statement(node, state),
         "synchronized_statement" => panic!("Synchronized is unsupported!"),
         "local_variable_declaration" => local_variable_declaration(node, state),
-        "throw_statement" => TreeContainer::make(Tree::LetP(PrimStatement { 
+        "throw_statement" => TreeContainer::make(Tree::LetP(PrimStatement {
             name: None,
             typ: Typ::Void,
             exp: Some(Operand::T(ExprTree {
                 op: Operation::Throw,
-                args: vec![expression(node.child(1).expect(""), state)]
+                args: vec![expression(node.child(1).expect(""), state)],
             })),
         })),
         "try_statement" => todo!(),
         "try_with_resources_statement" => todo!(),
         "line_comment" | "block_comment" => empty,
-        other => panic!("Unsupported statement {}!", other)
+        other => panic!("Unsupported statement {}!", other),
     }
 }
 
 /* ------------ DECLARATIONS ------------ */
 fn import_declaration(node: Node, state: &mut State) -> TreeContainer {
-    let path = state.tsret.get_text(&node.named_child(0).expect("Invalid Import"));
-    node.child(1).map(|x| if x.kind() == "static" { panic!("Static imports are not yet supported.") } );
-    return TreeContainer::make(Tree::LetI(ImportDeclaration { path: path.to_string() }));
+    let path = state
+        .tsret
+        .get_text(&node.named_child(0).expect("Invalid Import"));
+    node.child(1).map(|x| {
+        if x.kind() == "static" {
+            panic!("Static imports are not yet supported.")
+        }
+    });
+    return TreeContainer::make(Tree::LetI(ImportDeclaration {
+        path: path.to_string(),
+    }));
 }
 
 fn class_declaration(node: Node, state: &mut State) -> TreeContainer {
     let cname = state.tsret.get_field_text(&node, "name");
-    let csym = state.class_scope.find(cname).expect("Class Symbol was not inserted!");
+    let csym = state
+        .class_scope
+        .find(cname)
+        .expect("Class Symbol was not inserted!");
     let superclass = node.child_by_field_name("superclass").map(|sc| {
         let pname = state.tsret.get_text(&sc.child(1).expect("Missing Super."));
-        if let Some(sym) = state.class_scope.find(pname) { sym }
-        else { state.sm.fresh_reserved(pname) }
+        if let Some(sym) = state.class_scope.find(pname) {
+            sym
+        } else {
+            state.sm.fresh_reserved(pname)
+        }
     });
 
     // Note that we do this here, because in the first pass it's unclear whether the parent
     // Hasn't been added yet, or if it just doesn't exist in the heirarchy.
     superclass.map(|psym| state.directory.add_parent(csym, psym));
-    let members = state.directory.members(csym)
+    let members = state
+        .directory
+        .members(csym)
         .expect("class symbol was not inserted!")
         .iter()
         .map(|x| (*x, state.type_map.get(x).expect("").clone()))
@@ -311,18 +353,19 @@ fn class_declaration(node: Node, state: &mut State) -> TreeContainer {
         state.scope_in();
         state.class_sym = Some(csym);
         let mut bcursor = body.walk();
-        for child in body.named_children(&mut bcursor) { 
+        for child in body.named_children(&mut bcursor) {
             match child.kind() {
                 "method_declaration" | "constructor_declaration" => {
                     let text = state.tsret.get_field_text(&child, "name");
-                    let name = *state.directory.resolve_method(csym, text).expect(
-                        &format!("class {}, function {} wasn't inserted.", cname, text)
-                    );
+                    let name = *state.directory.resolve_method(csym, text).expect(&format!(
+                        "class {}, function {} wasn't inserted.",
+                        cname, text
+                    ));
                     methods.push_back(method_declaration(child, state, name));
-                },
-                _ => ()
+                }
+                _ => (),
             }
-        };
+        }
         state.class_sym = None;
         state.scope_out();
     }
@@ -330,7 +373,7 @@ fn class_declaration(node: Node, state: &mut State) -> TreeContainer {
         name: csym,
         members,
         methods,
-        extends: superclass
+        extends: superclass,
     }));
 }
 
@@ -341,7 +384,11 @@ fn enum_declaration(node: Node, state: &mut State) -> TreeContainer {
 
 fn method_declaration(node: Node, state: &mut State, name: Symbol) -> Tree {
     let constructor = node.kind() == "constructor_declaration";
-    let rtyp = state.type_map.get(&name).expect("Funtype was not inserted!").clone();
+    let rtyp = state
+        .type_map
+        .get(&name)
+        .expect("Funtype was not inserted!")
+        .clone();
     let mut modifiers = Vec::new();
     let mods = node.named_child(0).expect("Method has 0 children.");
     // TODO: All we really care about is whether the method is static.
@@ -373,12 +420,12 @@ fn method_declaration(node: Node, state: &mut State, name: Symbol) -> Tree {
             args.push((argsym, state.get_typ(&child)));
             state.var_scope.insert(argname, argsym);
         }
-    }    
+    }
 
     let body_node = state.tsret.get_field(&node, "body");
     let body = tail(
         inline_block(body_node, state),
-        Tree::Return(ReturnStatement { val: None })
+        Tree::Return(ReturnStatement { val: None }),
     );
     Tree::LetF(FunDeclaration {
         name,
@@ -387,35 +434,44 @@ fn method_declaration(node: Node, state: &mut State, name: Symbol) -> Tree {
         throws,
         modifiers,
         body,
-        constructor
+        constructor,
     })
 }
 
 fn break_statement(node: Node, state: &mut State) -> TreeContainer {
-    TreeContainer::make(Tree::Break(match state.tsret.get_text(&node.child(1).expect("")) {
-        ";" => state.break_label.expect("Loop was not labeled!"),
-        ident => state.find_label(ident).expect("Unknown label")
-    }))
+    TreeContainer::make(Tree::Break(
+        match state.tsret.get_text(&node.child(1).expect("")) {
+            ";" => state.break_label.expect("Loop was not labeled!"),
+            ident => state.find_label(ident).expect("Unknown label"),
+        },
+    ))
 }
 
 fn continue_statement(node: Node, state: &mut State) -> TreeContainer {
-    TreeContainer::make(Tree::Continue(match state.tsret.get_text(&node.child(1).expect("")) {
-        ";" => state.continue_label.expect("Loop was not labeled!"),
-        ident => state.find_label(ident).expect("Unknown label")
-    }))
+    TreeContainer::make(Tree::Continue(
+        match state.tsret.get_text(&node.child(1).expect("")) {
+            ";" => state.continue_label.expect("Loop was not labeled!"),
+            ident => state.find_label(ident).expect("Unknown label"),
+        },
+    ))
 }
 
 fn expression_statement(node: Node, state: &mut State) -> TreeContainer {
     TreeContainer::make(Tree::LetP(PrimStatement {
         name: None,
         typ: Typ::Void,
-        exp: Some(expression(node.child(0).expect("Expression is non-null"), state))
+        exp: Some(expression(
+            node.child(0).expect("Expression is non-null"),
+            state,
+        )),
     }))
 }
 
 fn labeled_statement(node: Node, state: &mut State) -> TreeContainer {
     let mut ans = TreeContainer::new();
-    let label_str = state.tsret.get_text(&node.child(0).expect("Label does not exist!"));
+    let label_str = state
+        .tsret
+        .get_text(&node.child(0).expect("Label does not exist!"));
     let label_sym = state.sm.fresh(label_str);
     state.label = Some(label_sym);
     state.label_stk.push((label_str, label_sym));
@@ -427,10 +483,7 @@ fn labeled_statement(node: Node, state: &mut State) -> TreeContainer {
             state.pop_label();
             ans.push_back(Tree::Block(BlockStatement {
                 label: label_sym,
-                bbody: tail(
-                    statements(child, state),
-                    Tree::Break(label_sym)
-                )
+                bbody: tail(statements(child, state), Tree::Break(label_sym)),
             }));
         }
     } else {
@@ -461,14 +514,14 @@ fn switch_statement(node: Node, state: &mut State) -> TreeContainer {
                 if ops.len() != 0 {
                     cur_args.extend(ops);
                     cases.push((cur_args.clone(), tree));
-                    cur_args.clear(); 
+                    cur_args.clear();
                 } else {
                     default = tree;
                 }
-            },
+            }
             "switch_rule" => panic!("switch_rule is unsupported"),
             "line_comment" | "block_comment" => (),
-            _ => break
+            _ => break,
         }
     }
     state.restore_break_label(bstash);
@@ -476,7 +529,7 @@ fn switch_statement(node: Node, state: &mut State) -> TreeContainer {
         arg,
         label: switch_label,
         cases: cases,
-        default: default
+        default: default,
     }))
 }
 
@@ -487,11 +540,17 @@ fn switch_block_statement_group(node: Node, state: &mut State) -> (Vec<Operand>,
     loop {
         let child = cur.node();
         match child.kind() {
-            "switch_label" => { switch_label(child, state).map(|e| ops.push(e)); },
-            _ => break
+            "switch_label" => {
+                switch_label(child, state).map(|e| ops.push(e));
+            }
+            _ => break,
         };
-        if !cur.goto_next_sibling() { return (ops, TreeContainer::new()) }
-        if !cur.goto_next_sibling() { return (ops, TreeContainer::new()) }
+        if !cur.goto_next_sibling() {
+            return (ops, TreeContainer::new());
+        }
+        if !cur.goto_next_sibling() {
+            return (ops, TreeContainer::new());
+        }
     }
     (ops, statements(cur.node(), state))
 }
@@ -501,7 +560,7 @@ fn switch_label(node: Node, state: &mut State) -> Option<Operand> {
     match state.tsret.get_text(&child) {
         "case" => Some(expression(node.child(1).expect("Empty Case!"), state)),
         "default" => None,
-        _ => panic!("Unknown switch label!")
+        _ => panic!("Unknown switch label!"),
     }
 }
 
@@ -509,14 +568,11 @@ fn if_statement(node: Node, state: &mut State) -> TreeContainer {
     let branch_label = state.pop_label().unwrap_or(state.sm.fresh("_if_"));
     let btrue = tail(
         inline_statement(state.tsret.get_field(&node, "consequence"), state),
-        Tree::Break(branch_label)
+        Tree::Break(branch_label),
     );
     let mut bfalse = TreeContainer::new();
     if let Some(alt) = node.child_by_field_name("alternative") {
-        bfalse = tail(
-            inline_statement(alt, state),
-            Tree::Break(branch_label)
-        )
+        bfalse = tail(inline_statement(alt, state), Tree::Break(branch_label))
     } else {
         bfalse = TreeContainer::make(Tree::Break(branch_label))
     }
@@ -524,7 +580,7 @@ fn if_statement(node: Node, state: &mut State) -> TreeContainer {
         cond: expression(state.tsret.get_field(&node, "condition"), state),
         btrue,
         bfalse,
-        label: branch_label
+        label: branch_label,
     }))
 }
 
@@ -540,7 +596,7 @@ fn while_statement(node: Node, state: &mut State, dowhile: bool) -> TreeContaine
         cond: expression(state.tsret.get_field(&node, "condition"), state),
         lbody: inline_body,
         label: loop_label,
-        dowhile
+        dowhile,
     }))
 }
 
@@ -549,7 +605,7 @@ fn for_statement(node: Node, state: &mut State) -> TreeContainer {
         Tree::LetP(PrimStatement {
             name: None,
             typ: Typ::Void,
-            exp: Some(op)
+            exp: Some(op),
         })
     };
 
@@ -572,12 +628,12 @@ fn for_statement(node: Node, state: &mut State) -> TreeContainer {
     let cstash = state.push_continue_label(loop_label);
     let inline_body = tail(
         inline_statement(state.tsret.get_field(&node, "body"), state),
-        Tree::Break(block_label)
+        Tree::Break(block_label),
     );
     let mut lbody = TreeContainer::new();
     lbody.push_back(Tree::Block(BlockStatement {
         label: block_label,
-        bbody: inline_body
+        bbody: inline_body,
     }));
     state.restore_break_label(bstash);
     state.restore_continue_label(cstash);
@@ -593,7 +649,12 @@ fn for_statement(node: Node, state: &mut State) -> TreeContainer {
     } else {
         Operand::C(Literal::Bool(true))
     };
-    res.push_back(Tree::Loop(LoopStatement { cond, label: loop_label, lbody, dowhile: false }));
+    res.push_back(Tree::Loop(LoopStatement {
+        cond,
+        label: loop_label,
+        lbody,
+        dowhile: false,
+    }));
     state.scope_out();
     res
 }
@@ -604,9 +665,12 @@ fn assert_statement(node: Node, state: &mut State) -> TreeContainer {
         typ: Typ::Void,
         exp: Some(Operand::T(ExprTree {
             op: Operation::Assert,
-            args: vec![node.child(1), node.child(2)].into_iter().flatten()
-            .map(|x| expression(x, state)).collect()
-        }))
+            args: vec![node.child(1), node.child(2)]
+                .into_iter()
+                .flatten()
+                .map(|x| expression(x, state))
+                .collect(),
+        })),
     }))
 }
 
@@ -626,7 +690,8 @@ fn local_variable_declaration(node: Node, state: &mut State) -> TreeContainer {
         let dim_res = cur.child_by_field_name("dimensions");
         let el_tp = if let Some(dim_cur) = dim_res {
             Typ::Array(state.sm.fresh_array(ArrayTyp {
-                eltype: tp, dims: state.tsret.get_dims(&dim_cur)
+                eltype: tp,
+                dims: state.tsret.get_dims(&dim_cur),
             }))
         } else {
             tp.clone()
@@ -637,12 +702,14 @@ fn local_variable_declaration(node: Node, state: &mut State) -> TreeContainer {
             continue;
         }
         break;
-    };
+    }
 
     let mut res = TreeContainer::new();
     for (name, exp) in syms.into_iter().zip(exps.into_iter()) {
         res.push_back(Tree::LetP(PrimStatement {
-            name: Some(name), typ: tp.clone(), exp
+            name: Some(name),
+            typ: tp.clone(),
+            exp,
         }));
     }
     res
@@ -658,7 +725,7 @@ fn inline_block(node: Node, state: &mut State) -> TreeContainer {
     res
 }
 
-// For things like if_statements, for_statements, etc. 
+// For things like if_statements, for_statements, etc.
 // If the statement is a block, it hoists the contents, otherwise, it uses them directly.
 fn inline_statement(node: Node, state: &mut State) -> TreeContainer {
     state.scope_in();
@@ -682,7 +749,7 @@ fn expression(node: Node, state: &mut State) -> Operand {
 fn type_coerce(a: Option<Typ>, b: Option<Typ>) -> Option<Typ> {
     match (a, b) {
         (Some(at), Some(bt)) if at == bt => Some(at),
-        _ => None
+        _ => None,
     }
 }
 
@@ -694,12 +761,18 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
         "instanceof_expression" => panic!("instanceof is not supported yet!"),
         "lambda_expression" => panic!("lambdas are not supported!"),
         "ternary_expression" => {
-            let (cond, cond_typ) = type_expression(state.tsret.get_field(&node, "condition"), state);
-            let (cons, cons_typ) = type_expression(state.tsret.get_field(&node, "consequence"), state);
-            let (alt, alt_typ) = type_expression(state.tsret.get_field(&node, "alternative"), state);
-            let tree = Operand::T(ExprTree { op: Operation::Ternary, args: vec![cond, cons, alt] });
+            let (cond, cond_typ) =
+                type_expression(state.tsret.get_field(&node, "condition"), state);
+            let (cons, cons_typ) =
+                type_expression(state.tsret.get_field(&node, "consequence"), state);
+            let (alt, alt_typ) =
+                type_expression(state.tsret.get_field(&node, "alternative"), state);
+            let tree = Operand::T(ExprTree {
+                op: Operation::Ternary,
+                args: vec![cond, cons, alt],
+            });
             (tree, type_coerce(cons_typ, alt_typ))
-        },
+        }
         "update_expression" => {
             use Operand::*;
             use Operation::*;
@@ -709,17 +782,29 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
                 _ => match node.child(1).expect("Update Expression Has Child").kind() {
                     "++" => (PostInc, 0),
                     "--" => (PostDec, 0),
-                    _ => panic!("Unknown Updated Expression!")
-                }
+                    _ => panic!("Unknown Updated Expression!"),
+                },
             };
             let (exp, etyp) = type_expression(node.child(idx).expect(""), state);
-            return (T(ExprTree { op, args: vec![exp] }), etyp);
-        },
+            return (
+                T(ExprTree {
+                    op,
+                    args: vec![exp],
+                }),
+                etyp,
+            );
+        }
         "cast_expression" => panic!("casts are not supported yet!"),
         "unary_expression" => {
             let (exp, etyp) = type_expression(state.tsret.get_field(&node, "operand"), state);
-            (Operand::T(ExprTree { op: state.tsret.get_op(&node), args: vec![exp] }), etyp)
-        },
+            (
+                Operand::T(ExprTree {
+                    op: state.tsret.get_op(&node),
+                    args: vec![exp],
+                }),
+                etyp,
+            )
+        }
         "switch_expression" => panic!("Switches are not supported as expressions!"),
 
         //------- PRIMARY EXPRESSIONS ---------//
@@ -727,9 +812,13 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
         // _literal
         "character_literal" => (O::C(state.tsret.get_lit(&node)), Some(Typ::Char)),
         "true" | "false" => (O::C(state.tsret.get_lit(&node)), Some(Typ::Bool)),
-        "decimal_integer_literal" | "hex_integer_literal" |
-        "octal_integer_literal" | "binary_integer_literal" => (O::C(state.tsret.get_lit(&node)), Some(Typ::Long)),
-        "decimal_floating_point_literal" | "hex_floating_point_literal" => (O::C(state.tsret.get_lit(&node)), Some(Typ::Double)),
+        "decimal_integer_literal"
+        | "hex_integer_literal"
+        | "octal_integer_literal"
+        | "binary_integer_literal" => (O::C(state.tsret.get_lit(&node)), Some(Typ::Long)),
+        "decimal_floating_point_literal" | "hex_floating_point_literal" => {
+            (O::C(state.tsret.get_lit(&node)), Some(Typ::Double))
+        }
         "string_literal" => (O::C(state.tsret.get_lit(&node)), Some(Typ::Str)),
         "null_literal" => (O::C(state.tsret.get_lit(&node)), None),
 
@@ -737,54 +826,70 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
         "this" => {
             let class_sym = state.class_sym.expect("Current Class not set!");
             (O::This(class_sym), Some(Typ::Class(class_sym)))
-        },
+        }
         "super" => {
             let class_sym = state.class_sym.expect("Current Class not set!");
-            let parent = state.directory.resolve_parent(class_sym).expect("Invalid use of Super");
+            let parent = state
+                .directory
+                .resolve_parent(class_sym)
+                .expect("Invalid use of Super");
             (O::Super(parent), Some(Typ::Class(parent)))
-        },
+        }
         "identifier" => {
             // Not actually sure if I should be allowing classes here...
             let iname = state.tsret.get_text(&node);
-            let isym = state.var_scope.find(iname).or_else(||
-                state.class_scope.find(iname)
-            );
+            let isym = state
+                .var_scope
+                .find(iname)
+                .or_else(|| state.class_scope.find(iname));
             if let Some(sym) = isym {
-                (O::V(sym), state.type_map.get(&sym).cloned())   
+                (O::V(sym), state.type_map.get(&sym).cloned())
             } else {
                 let class_sym = state.class_sym.expect("Missing Class");
                 let res = state.directory.resolve_field(class_sym, iname);
                 if let Some(sym) = res {
                     let tree = O::T(ExprTree {
                         op: Operation::Access,
-                        args: vec![Operand::This(class_sym), Operand::V(*sym)]}
-                    );
+                        args: vec![Operand::This(class_sym), Operand::V(*sym)],
+                    });
                     (tree, state.type_map.get(&sym).cloned())
                 } else {
                     // The symbol belongs to a super class we don't have.
                     let sym = state.sm.fresh_reserved(iname);
-                    (O::V(sym), state.type_map.get(&sym).cloned())   
+                    (O::V(sym), state.type_map.get(&sym).cloned())
                 }
             }
         }
 
-        "parenthesized_expression" => type_expression(node.child(1).expect("parenthesized_expression"), state),
+        "parenthesized_expression" => {
+            type_expression(node.child(1).expect("parenthesized_expression"), state)
+        }
         "object_creation_expression" => {
             let dne = || panic!("Object child node does not exist");
-            node.child(0).map(|x| x.kind() == "new").map_or_else(dne,
-                |result| { if !result { panic!("Unsupported Object Creation Expression!"); }
-            });
-            node.child(1).map(|x| x.kind() == "@").map_or_else(dne,
-                |result| { if result { panic!("Annotations are not supported!"); }
-            });
+            node.child(0)
+                .map(|x| x.kind() == "new")
+                .map_or_else(dne, |result| {
+                    if !result {
+                        panic!("Unsupported Object Creation Expression!");
+                    }
+                });
+            node.child(1)
+                .map(|x| x.kind() == "@")
+                .map_or_else(dne, |result| {
+                    if result {
+                        panic!("Annotations are not supported!");
+                    }
+                });
             let nchild = node.child_count();
-            node.child(nchild - 1).map(|x| x.kind() == "class_body").map_or_else(dne,
-                |result| { if result { panic!("Inline classes are not supported!"); }
-            });
+            node.child(nchild - 1)
+                .map(|x| x.kind() == "class_body")
+                .map_or_else(dne, |result| {
+                    if result {
+                        panic!("Inline classes are not supported!");
+                    }
+                });
             let obj = state.tsret.get_field_text(&node, "type");
-            let csym = state.class_scope.find(obj).unwrap_or(
-                state.sm.fresh(obj)
-            );
+            let csym = state.class_scope.find(obj).unwrap_or(state.sm.fresh(obj));
             // We put the symbol of the actual function call here, rather then the class symbol.
             let res1 = state.directory.resolve_method(csym, obj);
             let fsym = if let Some(sym) = res1 {
@@ -793,67 +898,107 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
                 state.sm.fresh(obj)
             };
             let mut args = vec![O::V(fsym)];
-            args.extend(parse_args(node.child_by_field_name("arguments").expect("Missing argument list."), state));
-            (O::T(ExprTree { op: Operation::New, args }), Some(Typ::Class(csym)))
-        },
+            args.extend(parse_args(
+                node.child_by_field_name("arguments")
+                    .expect("Missing argument list."),
+                state,
+            ));
+            (
+                O::T(ExprTree {
+                    op: Operation::New,
+                    args,
+                }),
+                Some(Typ::Class(csym)),
+            )
+        }
         "field_access" => {
             let (obj, obj_typ) = type_expression(state.tsret.get_field(&node, "object"), state);
             let fname = state.tsret.get_field_text(&node, "field");
-            let fsym = obj_typ.and_then(|x| {
-                if let Typ::Class(csym) = x {
-                    state.directory.resolve_field(csym, fname).copied()
-                } else { 
-                    None
-                }
-            }).unwrap_or_else(|| state.sm.fresh_reserved(fname));
-            let tree = O::T(ExprTree { op: Operation::Access, args: vec![obj, Operand::V(fsym)] });
+            let fsym = obj_typ
+                .and_then(|x| {
+                    if let Typ::Class(csym) = x {
+                        state.directory.resolve_field(csym, fname).copied()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| state.sm.fresh_reserved(fname));
+            let tree = O::T(ExprTree {
+                op: Operation::Access,
+                args: vec![obj, Operand::V(fsym)],
+            });
             (tree, state.type_map.get(&fsym).cloned())
-        },
+        }
         "array_access" => {
             let (arr, arr_type) = type_expression(state.tsret.get_field(&node, "array"), state);
             let index = expression(state.tsret.get_field(&node, "index"), state);
             let rtyp = arr_type.map(|tp| match tp {
                 Typ::Array(asym) => {
                     if let Some(ArrayTyp { eltype, dims }) = state.sm.arraytyp(asym) {
-                        if *dims == 0 { *eltype }
-                        else {
+                        if *dims == 0 {
+                            *eltype
+                        } else {
                             Typ::Array(state.sm.fresh_array(ArrayTyp {
-                                eltype: *eltype, dims: *dims - 1
+                                eltype: *eltype,
+                                dims: *dims - 1,
                             }))
                         }
                     } else {
                         panic!("Unknown ArrayType!")
                     }
-                },
-                other => panic!("Invalid array access on {:?}", other)
+                }
+                other => panic!("Invalid array access on {:?}", other),
             });
-            (O::T(ExprTree { op: Operation::Index, args: vec![arr, index] }), rtyp)
-        },
+            (
+                O::T(ExprTree {
+                    op: Operation::Index,
+                    args: vec![arr, index],
+                }),
+                rtyp,
+            )
+        }
         "method_invocation" => {
-            node.child_by_field_name("type_arguments").map(|_| panic!("Templates not supported!"));
+            node.child_by_field_name("type_arguments")
+                .map(|_| panic!("Templates not supported!"));
             // TODO: this is bad, it's a basic feature and you will need this for inlining extended classes.
-            node.child(2).map(|x| if x.kind() == "super" { panic!("Super not supported in invocation (yet)!") });
-            
+            node.child(2).map(|x| {
+                if x.kind() == "super" {
+                    panic!("Super not supported in invocation (yet)!")
+                }
+            });
+
             let fname = state.tsret.get_field_text(&node, "name");
             let obj_node = node.child_by_field_name("object").expect("missing object");
             let (obj, obj_type) = type_expression(obj_node, state);
-            let fsym = obj_type.and_then(|x| {
-                if let Typ::Class(csym) = x {
-                    state.directory.resolve_method(csym, fname).copied()
-                } else { 
-                    None
-                }
-            }).unwrap_or_else(|| state.sm.fresh_reserved(fname));
+            let fsym = obj_type
+                .and_then(|x| {
+                    if let Typ::Class(csym) = x {
+                        state.directory.resolve_method(csym, fname).copied()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| state.sm.fresh_reserved(fname));
             let mut args = vec![obj, Operand::V(fsym)];
             args.extend(parse_args(state.tsret.get_field(&node, "arguments"), state));
-            (O::T(ExprTree { op: Operation::InvokeVirtual, args }), state.type_map.get(&fsym).cloned())
-        },
+            (
+                O::T(ExprTree {
+                    op: Operation::InvokeVirtual,
+                    args,
+                }),
+                state.type_map.get(&fsym).cloned(),
+            )
+        }
         "method_reference" => panic!("Method references are not supported!"),
         "array_creation_expression" => {
             let dne = || panic!("Array child node does not exist");
-            node.child(1).map(|x| x.kind() == "@").map_or_else(dne,
-                |result| { if result { panic!("Annotations are not supported!"); }
-            });
+            node.child(1)
+                .map(|x| x.kind() == "@")
+                .map_or_else(dne, |result| {
+                    if result {
+                        panic!("Annotations are not supported!");
+                    }
+                });
 
             let mut ndims: u8 = 0;
             let mut args = Vec::new();
@@ -865,31 +1010,37 @@ fn type_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
                         "@" => panic!("Annotations are not supported!"),
                         "[" => (),
                         "]" => ndims += 1,
-                        _ => args.push(expression(child, state))
+                        _ => args.push(expression(child, state)),
                     }
                 }
             }
-            
+
             let eltype = state.get_typ(&node);
             let tp = Typ::Array(state.sm.fresh_array(ArrayTyp {
-                eltype, dims: ndims
+                eltype,
+                dims: ndims,
             }));
             let value_node = node.child_by_field_name("value");
             let a = if let Some(vnode) = value_node {
-                O::A(ArrayExpression::Initializer(
-                    Box::new(parse_array_initializer(vnode, state)
+                O::A(ArrayExpression::Initializer(Box::new(
+                    parse_array_initializer(vnode, state),
                 )))
             } else {
                 O::A(ArrayExpression::Empty(Box::new(args)))
             };
-            let tree = O::T(ExprTree { op: Operation::ArrayNew, args: vec![O::Tp(tp.clone()), a] });
+            let tree = O::T(ExprTree {
+                op: Operation::ArrayNew,
+                args: vec![O::Tp(tp.clone()), a],
+            });
             return (tree, Some(tp));
-        },
+        }
         "template_expression" => panic!("Template expressions are not supported yet."),
 
         // _reserved_identifier
-        "open" | "module" | "record" | "with" | "yield" | "seal" => panic!("Reserved Identifiers are not supported!"),
-        other => panic!("Unknown Expression Type: {}", other)
+        "open" | "module" | "record" | "with" | "yield" | "seal" => {
+            panic!("Reserved Identifiers are not supported!")
+        }
+        other => panic!("Unknown Expression Type: {}", other),
     }
 }
 
@@ -900,9 +1051,9 @@ fn parse_array_initializer(node: Node, state: &mut State) -> ArrayInitializer {
         match child.kind() {
             "{" | "}" | "," => (),
             "array_initializer" => ops.push(Box::new(ElementInitializer::ArrayInitializer(
-                parse_array_initializer(child, state))
-            )),
-            _ => ops.push(Box::new(ElementInitializer::Expr(expression(child, state))))
+                parse_array_initializer(child, state),
+            ))),
+            _ => ops.push(Box::new(ElementInitializer::Expr(expression(child, state)))),
         }
     }
     return ops;
@@ -922,6 +1073,9 @@ fn parse_args(node: Node, state: &mut State) -> Vec<Operand> {
 fn binary_expression(node: Node, state: &mut State) -> (Operand, Option<Typ>) {
     let (left, ltyp) = type_expression(state.tsret.get_field(&node, "left"), state);
     let (right, rtyp) = type_expression(state.tsret.get_field(&node, "right"), state);
-    let tree = ExprTree { op: state.tsret.get_op(&node), args: vec![left, right] };
+    let tree = ExprTree {
+        op: state.tsret.get_op(&node),
+        args: vec![left, right],
+    };
     (Operand::T(tree), type_coerce(ltyp, rtyp))
 }

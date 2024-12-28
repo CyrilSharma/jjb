@@ -1,11 +1,13 @@
 use std::str::FromStr;
 
-use tree_sitter::Node;
 use crate::ir::{Literal, Operation, Typ};
+use tree_sitter::Node;
 
-pub struct TsRetriever<'l> { source: &'l[u8] }
+pub struct TsRetriever<'l> {
+    source: &'l [u8],
+}
 impl<'l> TsRetriever<'l> {
-    pub fn new(source: &'l[u8]) -> Self {
+    pub fn new(source: &'l [u8]) -> Self {
         Self { source }
     }
 
@@ -13,19 +15,22 @@ impl<'l> TsRetriever<'l> {
         node.utf8_text(self.source)
             .unwrap_or_else(|_| panic!("Invalid UTF-8"))
     }
-    
+
     // Define a method that extracts text from a node and parses it into type `T`
     pub fn parse_text<T: FromStr>(&self, node: &Node) -> T {
         let text = node.utf8_text(self.source).expect("Invalid UTF-8");
-        if let Ok(res) = text.parse::<T>() { res }
-        else { panic!("Unable to parse text into type!") }
+        if let Ok(res) = text.parse::<T>() {
+            res
+        } else {
+            panic!("Unable to parse text into type!")
+        }
     }
-    
+
     pub fn get_field<'tree>(&self, node: &'tree Node<'tree>, field_name: &str) -> Node<'tree> {
         node.child_by_field_name(field_name)
             .unwrap_or_else(|| panic!("Field '{}' is missing", field_name))
     }
-    
+
     pub fn get_field_text(&self, node: &Node, field_name: &str) -> &'l str {
         self.get_field(node, field_name)
             .utf8_text(self.source)
@@ -40,12 +45,12 @@ impl<'l> TsRetriever<'l> {
                 "@" => panic!("Annotations are not supported!"),
                 "[" => (),
                 "]" => ndims += 1,
-                other => panic!("Unknown Character {} Found in Dimensions!", other)
+                other => panic!("Unknown Character {} Found in Dimensions!", other),
             }
         }
         ndims
     }
-    
+
     pub fn get_op(&self, node: &Node) -> Operation {
         use Operation as O;
         match self.get_field_text(node, "operator") {
@@ -57,7 +62,7 @@ impl<'l> TsRetriever<'l> {
             "!=" => O::Neq,
             "&&" => O::LAnd,
             "||" => O::LOr,
-    
+
             "+" => O::Add,
             "-" => O::Sub,
             "*" => O::Mul,
@@ -71,7 +76,7 @@ impl<'l> TsRetriever<'l> {
             ">>>" => O::UShr,
             "!" => O::LNot,
             "~" => O::Not,
-            
+
             "=" => O::Set,
             "+=" => O::PSet,
             "-=" => O::SSet,
@@ -84,20 +89,26 @@ impl<'l> TsRetriever<'l> {
             ">>=" => O::ShrSet,
             ">>>=" => O::UshrSet,
             "<<=" => O::ShlSet,
-    
-            other => panic!("Unknown Tree-Sitter Op: {}\n", other)
+
+            other => panic!("Unknown Tree-Sitter Op: {}\n", other),
         }
     }
-    
+
     pub fn get_lit(&self, node: &Node) -> Literal {
         use Literal::*;
         let parse_int = |var: &str| {
-            if var.ends_with("L") { return Long(var[0..var.len()-1].parse().expect("")) }
-            else { return Int(var[0..var.len()].parse().expect("")) }
+            if var.ends_with("L") {
+                return Long(var[0..var.len() - 1].parse().expect(""));
+            } else {
+                return Int(var[0..var.len()].parse().expect(""));
+            }
         };
         let parse_float = |var: &str| {
-            if var.ends_with("L") { return Double(var[0..var.len()-1].parse().expect("")) }
-            else { return Float(var[0..var.len()].parse().expect("")) }
+            if var.ends_with("L") {
+                return Double(var[0..var.len() - 1].parse().expect(""));
+            } else {
+                return Float(var[0..var.len()].parse().expect(""));
+            }
         };
         match node.kind() {
             "decimal_integer_literal" => parse_int(&self.get_text(node)),
@@ -111,7 +122,7 @@ impl<'l> TsRetriever<'l> {
             "character_literal" => Char(self.parse_text(&node)),
             "string_literal" => String(self.parse_text(&node)),
             "null_literal" => Null,
-            other => panic!("Unknown literal {}", other)
+            other => panic!("Unknown literal {}", other),
         }
     }
 }

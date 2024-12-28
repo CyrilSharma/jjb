@@ -1,6 +1,6 @@
-use std::fmt;
 use crate::container::Container;
 use crate::symbolmanager::Symbol;
+use std::fmt;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Typ {
@@ -15,23 +15,22 @@ pub enum Typ {
     Float,
     Double,
     Str,
-    Array(Symbol), 
-    Class(Symbol)
+    Array(Symbol),
+    Class(Symbol),
 }
 
 pub struct ArrayTyp {
     pub eltype: Typ,
-    pub dims: u8
+    pub dims: u8,
 }
-
 
 // Unsure if methods should be part of the type.
 pub struct ClassTyp {
-    pub members: Vec<(Symbol, Typ)>
+    pub members: Vec<(Symbol, Typ)>,
 }
 
 pub struct EnumTyp {
-    pub members: Vec<(Symbol, Typ)>
+    pub members: Vec<(Symbol, Typ)>,
 }
 
 impl Typ {
@@ -43,7 +42,7 @@ impl Typ {
             T::Int => 3,
             T::Short => 4,
             T::Long => 5,
-            _ => 0
+            _ => 0,
         }
     }
 }
@@ -53,13 +52,13 @@ pub type ArrayInitializer = Vec<Box<ElementInitializer>>;
 #[derive(Clone, Debug, PartialEq)]
 pub enum ArrayExpression {
     Empty(Box<Vec<Operand>>),
-    Initializer(Box<ArrayInitializer>)
+    Initializer(Box<ArrayInitializer>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ElementInitializer {
     Expr(Operand),
-    ArrayInitializer(ArrayInitializer)
+    ArrayInitializer(ArrayInitializer),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -75,7 +74,7 @@ pub enum Literal {
     Double(f64),
     // You can replace this with Cow<>
     // Or, you can make another Symbol, or index
-    String(String)
+    String(String),
 }
 
 impl Literal {
@@ -83,7 +82,7 @@ impl Literal {
         match self {
             Literal::Float(b) => Some(*b as f64),
             Literal::Double(i) => Some(*i as f64),
-            _ => None
+            _ => None,
         }
     }
 
@@ -91,7 +90,7 @@ impl Literal {
         match self {
             Literal::Float(b) => 1,
             Literal::Double(i) => 2,
-            _ => 0
+            _ => 0,
         }
     }
 
@@ -101,7 +100,7 @@ impl Literal {
             Literal::Int(i) => Some(*i as i64),
             Literal::Short(s) => Some(*s as i64),
             Literal::Long(l) => Some(*l),
-            _ => None
+            _ => None,
         }
     }
 
@@ -111,7 +110,7 @@ impl Literal {
             Literal::Int(i) => 2,
             Literal::Short(s) => 3,
             Literal::Long(l) => 4,
-            _ => 0
+            _ => 0,
         }
     }
 }
@@ -121,14 +120,14 @@ impl fmt::Display for Literal {
         match self {
             Literal::Null => write!(f, "null"),
             Literal::Bool(b) => write!(f, "{}", b),
-            Literal::Char(c) => write!(f, "{}", c), 
+            Literal::Char(c) => write!(f, "{}", c),
             Literal::Byte(b) => write!(f, "{}", b),
             Literal::Int(i) => write!(f, "{}", i),
             Literal::Short(s) => write!(f, "{}", s),
             Literal::Long(l) => write!(f, "{}", l),
             Literal::Float(fl) => write!(f, "{}", fl),
             Literal::Double(d) => write!(f, "{}", d),
-            Literal::String(s) => write!(f, "{}", s)
+            Literal::String(s) => write!(f, "{}", s),
         }
     }
 }
@@ -194,7 +193,7 @@ pub enum Operation {
     Assert,
     Access,
     Index,
-    Throw
+    Throw,
 }
 
 /*
@@ -222,18 +221,18 @@ pub enum Tree {
     Return(ReturnStatement),
     Break(Symbol),
     Continue(Symbol),
-    EntryPoint(Symbol)
+    EntryPoint(Symbol),
 }
 
 #[derive(Clone)]
 pub struct BlockStatement {
     pub label: Symbol,
-    pub bbody: TreeContainer
+    pub bbody: TreeContainer,
 }
 
 #[derive(Clone)]
 pub struct ImportDeclaration {
-    pub path: String
+    pub path: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -244,20 +243,20 @@ pub enum Operand {
     V(Symbol),
     T(ExprTree),
     A(ArrayExpression),
-    Tp(Typ)
+    Tp(Typ),
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExprTree {
     pub op: Operation,
-    pub args: Vec<Operand>
+    pub args: Vec<Operand>,
 }
 
 #[derive(Clone, Debug)]
 pub struct PrimStatement {
     pub name: Option<Symbol>,
     pub typ: Typ,
-    pub exp: Option<Operand>
+    pub exp: Option<Operand>,
 }
 
 #[derive(Clone)]
@@ -268,7 +267,7 @@ pub struct FunDeclaration {
     pub throws: Vec<String>,
     pub return_typ: Typ,
     pub body: TreeContainer,
-    pub constructor: bool
+    pub constructor: bool,
 }
 
 #[derive(Clone)]
@@ -276,10 +275,9 @@ pub struct ClassDeclaration {
     pub name: Symbol,
     pub members: Vec<(Symbol, Typ)>,
     pub methods: TreeContainer,
-    pub extends: Option<Symbol>
-    // I never use nested classes, and it's relatively easy to avoid them.
-    // If this gets open-sourced, this is something I could work on.
-    // pub classes: LinkedList<TreeRef>,
+    pub extends: Option<Symbol>, // I never use nested classes, and it's relatively easy to avoid them.
+                                 // If this gets open-sourced, this is something I could work on.
+                                 // pub classes: LinkedList<TreeRef>,
 }
 
 // We don't have support for more complicated enums, yet
@@ -287,7 +285,7 @@ pub struct ClassDeclaration {
 pub struct EnumDeclaration {
     pub name: Symbol,
     pub members: Vec<Symbol>,
-    pub values: Option<Vec<Literal>>
+    pub values: Option<Vec<Literal>>,
 }
 
 #[derive(Clone)]
@@ -295,7 +293,7 @@ pub struct SwitchStatement {
     pub arg: Operand,
     pub label: Symbol,
     pub cases: Vec<(Vec<Operand>, TreeContainer)>,
-    pub default: TreeContainer
+    pub default: TreeContainer,
 }
 
 // TODO: Special flag for do-while to avoid lots of edge cases.
@@ -305,7 +303,7 @@ pub struct LoopStatement {
     pub cond: Operand,
     pub label: Symbol,
     pub lbody: TreeContainer,
-    pub dowhile: bool
+    pub dowhile: bool,
 }
 
 #[derive(Clone)]
@@ -313,7 +311,7 @@ pub struct IfStatement {
     pub cond: Operand,
     pub label: Symbol,
     pub btrue: TreeContainer,
-    pub bfalse: TreeContainer
+    pub bfalse: TreeContainer,
 }
 
 #[derive(Clone)]
@@ -323,10 +321,10 @@ pub struct TryStatement {
     // The class symbol and the arg symbol.
     pub exceptions: Vec<(Symbol, Symbol)>,
     pub catches: Vec<TreeContainer>,
-    pub finally: TreeContainer
+    pub finally: TreeContainer,
 }
 
 #[derive(Clone)]
 pub struct ReturnStatement {
-    pub val: Option<Operand>
+    pub val: Option<Operand>,
 }

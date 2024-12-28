@@ -1,11 +1,11 @@
-use std::collections::HashMap;
-use crate::substitution::Substitution;
-use crate::symbolmanager::SymbolManager;
-use crate::{cssa, ir::*};
-use crate::symbolmanager::Symbol;
-use fixedbitset::FixedBitSet;
 use crate::graph::{self, print_graph, Allocator, CfgNode, Id};
 use crate::ir::{ExprTree, Operand};
+use crate::substitution::Substitution;
+use crate::symbolmanager::Symbol;
+use crate::symbolmanager::SymbolManager;
+use crate::{cssa, ir::*};
+use fixedbitset::FixedBitSet;
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 struct State<'l> {
@@ -22,12 +22,12 @@ impl<'l> State<'l> {
         *entry += 1;
     }
     fn get_name(&mut self, sym: Symbol) -> Symbol {
-        *self.stack.get(&sym).unwrap_or(&vec![sym])
-            .last().expect(&format!(
-                "Symbol {} was undefined",
-                self.sm.uname(sym)
-            )
-        )
+        *self
+            .stack
+            .get(&sym)
+            .unwrap_or(&vec![sym])
+            .last()
+            .expect(&format!("Symbol {} was undefined", self.sm.uname(sym)))
     }
     fn restore_stack(&mut self, mut push_count: HashMap<Symbol, usize>) {
         let mut dead = Vec::new();
@@ -39,18 +39,22 @@ impl<'l> State<'l> {
                 //     println!("==> removed {} -> {}", self.sm.uname(*sym), self.sm.uname(nname));
                 //     amt -= 1;
                 // }
-                if stack.len() == 0 { dead.push(*sym) }
+                if stack.len() == 0 {
+                    dead.push(*sym)
+                }
             }
         }
-        for sym in dead { self.stack.remove(&sym); }
+        for sym in dead {
+            self.stack.remove(&sym);
+        }
     }
 }
 
 pub fn transform(tree: Tree, sm: &mut SymbolManager) -> Tree {
     match tree {
-        Tree::Program(stmts) => Tree::Program(
-            stmts.into_iter().map(|f| transform(f, sm)).collect()
-        ),
+        Tree::Program(stmts) => {
+            Tree::Program(stmts.into_iter().map(|f| transform(f, sm)).collect())
+        }
         Tree::LetI(i) => Tree::LetI(i),
         Tree::LetF(f) => Tree::LetF({
             let (mut allocator, next_map) = graph::build(f.body);
@@ -66,7 +70,7 @@ pub fn transform(tree: Tree, sm: &mut SymbolManager) -> Tree {
         }),
         Tree::LetE(_) => todo!(),
         Tree::EntryPoint(e) => Tree::EntryPoint(e),
-        _ => panic!("Invalid tree in transform")
+        _ => panic!("Invalid tree in transform"),
     }
 }
 
@@ -76,13 +80,19 @@ pub fn transform_graph(alloc: &mut Allocator, sm: &mut SymbolManager) {
     let livein = graph::livein(alloc, sm);
     let dominance_frontier = graph::dominance_frontier(&doms, alloc);
     let mut idom: Vec<Vec<usize>> = vec![Vec::new(); alloc.len()];
-    for (i, d) in doms.into_iter().enumerate() { if d != i { idom[d].push(i) } }
+    for (i, d) in doms.into_iter().enumerate() {
+        if d != i {
+            idom[d].push(i)
+        }
+    }
     let (vars, typs) = graph::stat(alloc);
     for (v, mut block_set) in vars {
         let mut blocks: Vec<Id> = block_set.clone().into_iter().collect();
         while let Some(vassigned) = blocks.pop() {
             for block in dominance_frontier[vassigned].ones() {
-                if !livein[block].contains(&v) { continue }
+                if !livein[block].contains(&v) {
+                    continue;
+                }
                 insert_phi(v, typs[&v], block, alloc);
                 if !block_set.contains(&block) {
                     block_set.insert(block);
@@ -91,30 +101,44 @@ pub fn transform_graph(alloc: &mut Allocator, sm: &mut SymbolManager) {
             }
         }
     }
-    
-    let mut state = State { stack: HashMap::new(), sm };
+
+    let mut state = State {
+        stack: HashMap::new(),
+        sm,
+    };
     rename(0, &mut state, alloc, &typs, &idom);
 }
 
 pub fn insert_phi(v: Symbol, typ: Typ, block: Id, alloc: &mut Allocator) {
     fn phi(v: Symbol, typ: Typ) -> Tree {
         Tree::LetP(PrimStatement {
-            name: Some(v), typ,
+            name: Some(v),
+            typ,
             exp: Some(Operand::T(ExprTree {
                 // The first argument is reserved for tracking the original variable.
-                op: Operation::Phi, args: vec![Operand::V(v)],
+                op: Operation::Phi,
+                args: vec![Operand::V(v)],
             })),
         })
     }
-    
+
     fn has_phi(head: &mut Tree, v: Symbol) -> bool {
         if let Tree::LetP(PrimStatement {
-            exp: Some(Operand::T(ExprTree { op: Operation::Phi, args })),
+            exp:
+                Some(Operand::T(ExprTree {
+                    op: Operation::Phi,
+                    args,
+                })),
             ..
-        }) = head {
+        }) = head
+        {
             match args[0] {
-                Operand::V(sym) => if sym != v { return false },
-                _ => panic!("Invalid Phi")
+                Operand::V(sym) => {
+                    if sym != v {
+                        return false;
+                    }
+                }
+                _ => panic!("Invalid Phi"),
             }
             return true;
         }
@@ -123,14 +147,21 @@ pub fn insert_phi(v: Symbol, typ: Typ, block: Id, alloc: &mut Allocator) {
 
     let node = alloc.grab_mut(block);
     if let Some(head) = node.content.iter_mut().next() {
-        if has_phi(head, v) { return }
+        if has_phi(head, v) {
+            return;
+        }
     }
     node.content.push_front(phi(v, typ));
 }
 
 // https://www.cs.cornell.edu/courses/cs6120/2020fa/lesson/5/
-fn rename(id: Id, state: &mut State, alloc: &mut Allocator,
-            typs: &HashMap<Symbol, Typ>, idom: &Vec<Vec<Id>>) {
+fn rename(
+    id: Id,
+    state: &mut State,
+    alloc: &mut Allocator,
+    typs: &HashMap<Symbol, Typ>,
+    idom: &Vec<Vec<Id>>,
+) {
     let mut push_count = HashMap::new();
     let content = alloc.grab_mut(id).content.iter_mut();
     for tree in content {
@@ -138,7 +169,7 @@ fn rename(id: Id, state: &mut State, alloc: &mut Allocator,
             Tree::LetP(p) => {
                 match p.exp.as_mut() {
                     Some(op) => rename_operand(op, state),
-                    _ => ()
+                    _ => (),
                 }
                 if let Some(pname) = p.name {
                     let nname = state.sm.refresh(&pname);
@@ -146,33 +177,47 @@ fn rename(id: Id, state: &mut State, alloc: &mut Allocator,
                     p.name = Some(nname);
                     p.typ = typs[&pname];
                 }
-            },
+            }
             Tree::Switch(s) => rename_operand(&mut s.arg, state),
             Tree::If(i) => rename_operand(&mut i.cond, state),
             Tree::Return(r) => match r.val.as_mut() {
                 Some(op) => rename_operand(op, state),
-                _ => ()
+                _ => (),
             },
             Tree::Loop(l) => rename_operand(&mut l.cond, state),
-            Tree::LetI(_) | Tree::Break(_) | Tree::Block(_) |
-            Tree::Continue(_) | Tree::EntryPoint(_) => (),
+            Tree::LetI(_)
+            | Tree::Break(_)
+            | Tree::Block(_)
+            | Tree::Continue(_)
+            | Tree::EntryPoint(_) => (),
             Tree::Try(_) => todo!(),
-            _ => panic!("Invalid Tree Type in SSA")
+            _ => panic!("Invalid Tree Type in SSA"),
         }
     }
 
     // https://users.rust-lang.org/t/need-help-with-mutable-and-immutable-borrow-of-self/68811/2
     let children = std::mem::take(&mut alloc.grab_mut(id).children);
-    for &child in &children { // For Each Successor
+    for &child in &children {
+        // For Each Successor
         let mut iter = alloc.grab_mut(child).content.iter_mut();
         while let Some(Tree::LetP(PrimStatement {
-            exp: Some(Operand::T(ExprTree { op: Operation::Phi, args })),
+            exp:
+                Some(Operand::T(ExprTree {
+                    op: Operation::Phi,
+                    args,
+                })),
             name: Some(nm),
             ..
-        })) = iter.next() { // For Each Phi Node containing a name we changed.
+        })) = iter.next()
+        {
+            // For Each Phi Node containing a name we changed.
             if let Operand::V(sym) = args[0] {
-                if !state.stack.contains_key(&sym) { continue }
-                if *nm == state.get_name(sym) { continue }
+                if !state.stack.contains_key(&sym) {
+                    continue;
+                }
+                if *nm == state.get_name(sym) {
+                    continue;
+                }
                 args.push(Operand::V(state.get_name(sym)));
             } else {
                 panic!("Invalid Phi Operation!")
@@ -188,11 +233,10 @@ fn rename(id: Id, state: &mut State, alloc: &mut Allocator,
 
 fn rename_operand(op: &mut Operand, state: &mut State) {
     match op {
-        Operand::This(_) | Operand::Super(_) |
-        Operand::C(_) | Operand::Tp(_) => (),
+        Operand::This(_) | Operand::Super(_) | Operand::C(_) | Operand::Tp(_) => (),
         Operand::V(sym) => {
             *sym = state.get_name(*sym);
-        },
+        }
         Operand::T(ExprTree { op, args }) => match op {
             Operation::InstanceOf | Operation::Throw => todo!(),
             Operation::ArrayNew => rename_operand(&mut args[1], state),
@@ -200,22 +244,24 @@ fn rename_operand(op: &mut Operand, state: &mut State) {
             Operation::InvokeVirtual => {
                 rename_operand(&mut args[0], state);
                 args[2..].iter_mut().for_each(|a| rename_operand(a, state));
-            },
+            }
             Operation::InvokeStatic => todo!(),
             Operation::Access => rename_operand(&mut args[0], state),
-            _ => args.iter_mut().for_each(|a| rename_operand(a, state))
-        }
+            _ => args.iter_mut().for_each(|a| rename_operand(a, state)),
+        },
         Operand::A(aexp) => match aexp {
-            ArrayExpression::Empty(v) => v.as_mut().iter_mut().for_each(|a| rename_operand(a, state)),
-            ArrayExpression::Initializer(aexp) => rename_array_initializer(aexp, state)
-        }
+            ArrayExpression::Empty(v) => {
+                v.as_mut().iter_mut().for_each(|a| rename_operand(a, state))
+            }
+            ArrayExpression::Initializer(aexp) => rename_array_initializer(aexp, state),
+        },
     }
 }
 
 fn rename_array_initializer(ops: &mut ArrayInitializer, state: &mut State) {
     ops.iter_mut().for_each(|item| match item.as_mut() {
         ElementInitializer::Expr(exp) => rename_operand(exp, state),
-        ElementInitializer::ArrayInitializer(a) => rename_array_initializer(a, state)
+        ElementInitializer::ArrayInitializer(a) => rename_array_initializer(a, state),
     });
 }
 
@@ -225,14 +271,19 @@ pub fn verify(alloc: &Allocator, sm: &SymbolManager) -> Result<(), String> {
         let content = &alloc.grab(id).content;
         for tree in content {
             match tree {
-                Tree::LetP(p) => if let Some(pname) = p.name {
-                    if defs.contains(&p.name) {
-                        return Err(format!("Variable {:?} is defined twice!", sm.uname(pname)));
-                    } else {
-                        defs.insert(p.name);
+                Tree::LetP(p) => {
+                    if let Some(pname) = p.name {
+                        if defs.contains(&p.name) {
+                            return Err(format!(
+                                "Variable {:?} is defined twice!",
+                                sm.uname(pname)
+                            ));
+                        } else {
+                            defs.insert(p.name);
+                        }
                     }
-                },
-                _ => ()
+                }
+                _ => (),
             }
         }
     }
@@ -241,7 +292,6 @@ pub fn verify(alloc: &Allocator, sm: &SymbolManager) -> Result<(), String> {
 
 #[cfg(test)]
 mod test {
-    use tree_sitter::Parser;
     use crate::converter::convert;
     use crate::hoist::hoist;
     use crate::optimizer::optimize;
@@ -249,6 +299,7 @@ mod test {
     use crate::printer::print;
     use crate::symbolmanager::SymbolManager;
     use crate::typeinfer::typeinfer;
+    use tree_sitter::Parser;
 
     #[test]
     pub fn f() {
@@ -270,11 +321,16 @@ mod test {
         "#;
 
         let mut parser = Parser::new();
-        parser.set_language(&tree_sitter_java::language()).expect("Error loading Java grammar");
+        parser
+            .set_language(&tree_sitter_java::language())
+            .expect("Error loading Java grammar");
         let tree = parser.parse(text, None).unwrap();
         let mut sm = SymbolManager::new();
         let class_name = "Test".to_string();
-        let params = Parameters { entry_class: class_name, entry_name: "main".to_string() };
+        let params = Parameters {
+            entry_class: class_name,
+            entry_name: "main".to_string(),
+        };
         let mut ast = convert(tree.root_node(), text.as_bytes(), &params, &mut sm);
         ast = hoist(ast.as_ref(), &mut sm);
         typeinfer(ast.as_mut(), &mut sm);

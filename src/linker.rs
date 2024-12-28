@@ -12,7 +12,6 @@ pub fn link(base: ir::Tree, extention: ir::Tree) -> ir::Tree {
     }
 }
 
-
 fn declaration_split(input: ir::TreeContainer) -> (ir::TreeContainer, ir::TreeContainer) {
     let mut declarations = ir::TreeContainer::new();
     let mut content = ir::TreeContainer::new();
@@ -23,5 +22,5 @@ fn declaration_split(input: ir::TreeContainer) -> (ir::TreeContainer, ir::TreeCo
             content.push_back(item);
         }
     }
-    return ( declarations, content )
+    return (declarations, content);
 }

@@ -1,12 +1,12 @@
-use std::fs::{self, write};
-use std::process::Command;
+use jjb::hoist::hoist;
 use jjb::optimizer::optimize;
 use jjb::parameters::Parameters;
 use jjb::printer::print;
-use jjb::hoist::hoist;
-use jjb::{cssa, flatten, ssa};
-use jjb::{converter::convert, ir::Tree, printer::str_print, symbolmanager::SymbolManager};
 use jjb::typeinfer::typeinfer;
+use jjb::{converter::convert, ir::Tree, printer::str_print, symbolmanager::SymbolManager};
+use jjb::{cssa, flatten, ssa};
+use std::fs::{self, write};
+use std::process::Command;
 use tree_sitter::Parser;
 
 macro_rules! method_test {
@@ -27,7 +27,9 @@ macro_rules! classes_test {
     };
 }
 
-struct JavaFileManager { base_dir: String }
+struct JavaFileManager {
+    base_dir: String,
+}
 impl JavaFileManager {
     /// Create a new JavaFileManager with the specified base directory.
     fn new(base_dir: &str) -> Self {
@@ -52,11 +54,7 @@ impl JavaFileManager {
             .output()
             .expect("Failed to execute 'javac' command");
         let stderr = String::from_utf8_lossy(&compile_output.stderr).to_string();
-        assert!(
-            stderr.trim().is_empty(),
-            "stderr is not empty: {}",
-            stderr
-        );
+        assert!(stderr.trim().is_empty(), "stderr is not empty: {}", stderr);
     }
 
     /// Executes the compiled Java class from its subdirectory.
@@ -78,11 +76,7 @@ impl JavaFileManager {
             run_output.status.code().unwrap_or_default(),
             stderr
         );
-        assert!(
-            stderr.trim().is_empty(),
-            "stderr is not empty: {}",
-            stderr
-        );
+        assert!(stderr.trim().is_empty(), "stderr is not empty: {}", stderr);
         stdout
     }
 
@@ -127,8 +121,14 @@ impl JavaFileManager {
     }
 }
 
-
-fn test_equal(source: &str, compile: &str, tree: &Tree, sm: &SymbolManager, name: &str, params: &Parameters) {
+fn test_equal(
+    source: &str,
+    compile: &str,
+    tree: &Tree,
+    sm: &SymbolManager,
+    name: &str,
+    params: &Parameters,
+) {
     let source_path = format!("{}_source", name);
     let compile_path = format!("{}_compile", name);
     let buffer_str = str_print(tree, sm);
@@ -147,11 +147,16 @@ fn test_equal(source: &str, compile: &str, tree: &Tree, sm: &SymbolManager, name
 
 fn test(name: &str, source: &str, compile: &str) {
     let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_java::language()).expect("Error loading Java grammar");
+    parser
+        .set_language(&tree_sitter_java::language())
+        .expect("Error loading Java grammar");
     let tree = parser.parse(compile, None).unwrap();
     let mut sm = SymbolManager::new();
     let class_name = format!("{}_compile", name);
-    let params = Parameters { entry_class: class_name, entry_name: "main".to_string() };
+    let params = Parameters {
+        entry_class: class_name,
+        entry_name: "main".to_string(),
+    };
     let mut ast = convert(tree.root_node(), compile.as_bytes(), &params, &mut sm);
     ast = hoist(ast.as_ref(), &mut sm);
     typeinfer(ast.as_mut(), &mut sm);
@@ -166,53 +171,87 @@ fn test(name: &str, source: &str, compile: &str) {
 // Just call Test.main() same as class. Then, it will be easy to generalize this for
 // Testing all compiler phases simultaneously.
 fn test_method(name: &str, source: &str) {
-    let indented_source = source.lines().map(|line| format!("    {}", line)).collect::<Vec<_>>().join("\n");
-    test(name, &format!(r#"
+    let indented_source = source
+        .lines()
+        .map(|line| format!("    {}", line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    test(
+        name,
+        &format!(
+            r#"
 public class {}_source {{
     public static void main(String[] args) {{
         {}
     }}
-}}"#, name, indented_source), &format!(r#"
+}}"#,
+            name, indented_source
+        ),
+        &format!(
+            r#"
 public class {}_compile {{
     public static void main(String[] args) {{
         {}
     }}
-}}"#, name, indented_source),
+}}"#,
+            name, indented_source
+        ),
     );
 }
 
 fn test_classes(name: &str, source: &str) {
-    let indented_source = source.lines().map(|line| format!("    {}", line)).collect::<Vec<_>>().join("\n");
-    test(name, &format!(r#"
+    let indented_source = source
+        .lines()
+        .map(|line| format!("    {}", line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    test(
+        name,
+        &format!(
+            r#"
 public class {}_source {{
     public static void main(String[] args) {{
         Test.start();
     }}
 }}
-{}"#, name, indented_source), &format!(r#"
+{}"#,
+            name, indented_source
+        ),
+        &format!(
+            r#"
 public class {}_compile {{
     public static void main(String[] args) {{
         Test.start();
     }}
 }}
-{}"#, name, indented_source),
+{}"#,
+            name, indented_source
+        ),
     );
 }
 
-method_test!(negative_1, r#"
+method_test!(
+    negative_1,
+    r#"
     int x = 5;
     int y = -7;
     System.out.println(-x + y);
-"#);
+"#
+);
 
-method_test!(ternary, r#"
+method_test!(
+    ternary,
+    r#"
     boolean a = false;
     System.out.println(a ? 1 : -1);
     boolean b = true;
     System.out.println(b ? 1 : -1);
-"#);
+"#
+);
 
-method_test!(undefined, r#"
+method_test!(
+    undefined,
+    r#"
     int a, b, c, d, e, f;
     a = 2; b = 2; c = 2;
     d = 2; e = 2; f = 2;
@@ -220,9 +259,12 @@ method_test!(undefined, r#"
         "%d %d %d %d %d %d\n",
         a, b, c, d, e, f
     );
-"#);
+"#
+);
 
-method_test!(prim_arith, r#"
+method_test!(
+    prim_arith,
+    r#"
     int a=1, b=-2, c=3, d=-4, e=5, f=-6, g=7, h=-8;
     for (int it = 0; it < 10; it++) {
         a = b + c;
@@ -239,9 +281,12 @@ method_test!(prim_arith, r#"
         "%d %d %d %d %d %d %d %d\n",
         a, b, c, d, e, f, g, h
     );
-"#);
+"#
+);
 
-method_test!(prim_arith_simple, r#"
+method_test!(
+    prim_arith_simple,
+    r#"
     int a=1, b=-2, c=3, d=-4, e=5;
     for (int it = 0; it < 10; it++) {
         a = b + c;
@@ -253,9 +298,12 @@ method_test!(prim_arith_simple, r#"
         "%d %d %d %d\n",
         a, b, c, d
     );
-"#);
+"#
+);
 
-method_test!(prim_incr, r#"
+method_test!(
+    prim_incr,
+    r#"
     int a=1, b=-2, c=3, d=-4, e=5, f=-6, g=7, h=-8;
     for (int it = 0; it < 10; it++) {
         a = b++ - ++c + d++ - e++ - f++ + f--;
@@ -267,9 +315,12 @@ method_test!(prim_incr, r#"
         "%d %d %d %d %d %d %d %d\n",
         a, b, c, d, e, f, g, h
     );
-"#);
+"#
+);
 
-method_test!(prim_modifying_basic, r#"
+method_test!(
+    prim_modifying_basic,
+    r#"
     int a=1, b=-2, c=3;
     for (int it = 0; it < 10; it++) {
         a += b;
@@ -278,9 +329,12 @@ method_test!(prim_modifying_basic, r#"
     System.out.printf(
         "%d %d %d\n", a, b, c
     );
-"#);
+"#
+);
 
-method_test!(prim_modifying, r#"
+method_test!(
+    prim_modifying,
+    r#"
     int a=1, b=-2, c=3, d=-4, e=5, f=-6, g=7, h=-8, i=9, j=-10, k=11;
     for (int it = 0; it < 10; it++) {
         a += b;
@@ -299,9 +353,12 @@ method_test!(prim_modifying, r#"
         "%d %d %d %d %d %d %d %d %d %d %d\n",
         a, b, c, d, e, f, g, h, i, j, k
     );
-"#);
+"#
+);
 
-method_test!(prim_conditionals, r#"
+method_test!(
+    prim_conditionals,
+    r#"
     boolean a=true, b=false, c=true, d=false, e=true, f=true, g=false, h=true, i=true;
     for (int it = 0; it < 10; it++) {
         a = a == b;
@@ -323,9 +380,12 @@ method_test!(prim_conditionals, r#"
         System.out.print(h ? 1 : 0);
         System.out.print(i ? 1 : 0);
     }
-"#);
+"#
+);
 
-method_test!(prim_bitwise, r#"
+method_test!(
+    prim_bitwise,
+    r#"
     int a=1, b=-2, c=3, d=-4, e=5, f=-6, g=7;
     for (int it = 0; it < 10; it++) {
         a = ~b;
@@ -340,18 +400,24 @@ method_test!(prim_bitwise, r#"
         "%d %d %d %d %d %d %d\n",
         a, b, c, d, e, f, g
     );
-"#);
+"#
+);
 
 /* -------- LOOPS ---------- */
-method_test!(for_1, r#"
+method_test!(
+    for_1,
+    r#"
     int count = 0;
     for (int i = 0; i < 10; i++) {
         count++;
     }
     System.out.println(count);
-"#);
+"#
+);
 
-method_test!(for_2, r#"
+method_test!(
+    for_2,
+    r#"
     int a, b, c, cnt;
     for (a=12, b=23, c=45, cnt=0; cnt < 100; cnt++, a <<= 1, b ^= c, c -= 3) {
         a ^= (b - c);
@@ -362,9 +428,12 @@ method_test!(for_2, r#"
         "%d %d %d",
         a, b, c
     );
-"#);
+"#
+);
 
-method_test!(for_3, r#"
+method_test!(
+    for_3,
+    r#"
     int hash = 0;
     for (int i = 0; i < 10; i++) {
         for (int j = 0; j < i; j++) {
@@ -374,25 +443,34 @@ method_test!(for_3, r#"
         }
     }
     System.out.println(hash);
-"#);
+"#
+);
 
-method_test!(do_1, r#"
+method_test!(
+    do_1,
+    r#"
     int count = 0;
     do {
         count++;
     } while (count < 100);
     System.out.println(count);
-"#);
+"#
+);
 
-method_test!(while_loop_1, r#"
+method_test!(
+    while_loop_1,
+    r#"
     int count = 0;
     while (count < 420) {
         count++;
     }
     System.out.println(count);
-"#);
+"#
+);
 
-method_test!(while_loop_2, r#"
+method_test!(
+    while_loop_2,
+    r#"
     int i = 0, j = 0, k = 0;
     while (i++ < 10) {
         while (j++ < 10) {
@@ -407,9 +485,12 @@ method_test!(while_loop_2, r#"
         "%d %d %d",
         i, j, k
     );
-"#);
+"#
+);
 
-method_test!(many_loops, r#"
+method_test!(
+    many_loops,
+    r#"
     int count = 0;
     for (int i = 0; i < 3; i++) {
         count += i;
@@ -425,19 +506,25 @@ method_test!(many_loops, r#"
         }
     }
     System.out.println(count);
-"#);
+"#
+);
 
 /* ----- CONDITIONALS ------- */
-method_test!(if_1, r#"
+method_test!(
+    if_1,
+    r#"
     int i = 10;
     if (i < 12) {
         System.out.println("CORRECT");
     } else {
         System.out.println("INCORRECT");
     }
-"#);
+"#
+);
 
-method_test!(if_2, r#"
+method_test!(
+    if_2,
+    r#"
     int i = 10;
     if (i > 12) {
         System.out.println("INCORRECT");
@@ -446,9 +533,12 @@ method_test!(if_2, r#"
     } else {
         System.out.println("INCORRECT");
     }
-"#);
+"#
+);
 
-method_test!(if_3, r#"
+method_test!(
+    if_3,
+    r#"
     int x = 129;
     int y = 238;
     int z = 0;
@@ -481,9 +571,12 @@ method_test!(if_3, r#"
         }
     }
     System.out.println(z);
-"#);
+"#
+);
 
-method_test!(if_no_else, r#"
+method_test!(
+    if_no_else,
+    r#"
     int i = 10;
     if (i < 12) {
         System.out.print("0");
@@ -493,9 +586,12 @@ method_test!(if_no_else, r#"
         System.out.print("2");
     }
     System.out.print("3");
-"#);
+"#
+);
 
-method_test!(label_1, r#"
+method_test!(
+    label_1,
+    r#"
     int count = 0;
     label: {
         count += 1;
@@ -503,9 +599,12 @@ method_test!(label_1, r#"
         count += 1;
     }
     System.out.println(count);
-"#);
+"#
+);
 
-method_test!(label_loop, r#"
+method_test!(
+    label_loop,
+    r#"
     int count = 0;
     label: while (++count < 30) {
         count += 1;
@@ -513,9 +612,12 @@ method_test!(label_loop, r#"
         count += 1;
     }
     System.out.println(count);
-"#);
+"#
+);
 
-method_test!(label_2, r#"
+method_test!(
+    label_2,
+    r#"
     int i = 0, j = 0, k = 0;
     label1: while (i++ < 10) {
         label2: while (j++ < 10) {
@@ -531,9 +633,12 @@ method_test!(label_2, r#"
             break label1;
         }
     }
-"#);
+"#
+);
 
-method_test!(switch_1, r#"
+method_test!(
+    switch_1,
+    r#"
     int i = 5;
     int cnt = 0;
     switch (i) {
@@ -544,9 +649,12 @@ method_test!(switch_1, r#"
         case 4: cnt *= cnt;
     }
     System.out.println(cnt);
-"#);
+"#
+);
 
-method_test!(switch_2, r#"
+method_test!(
+    switch_2,
+    r#"
     int cnt = 0;
     while (cnt++ < 50) {
         switch (cnt % 5) {
@@ -558,9 +666,12 @@ method_test!(switch_2, r#"
         }
     }
     System.out.println(cnt);
-"#);
+"#
+);
 
-method_test!(switch_3, r#"
+method_test!(
+    switch_3,
+    r#"
     int cnt = 0;
     while (cnt++ < 50) {
         switch (cnt % 5) {
@@ -572,9 +683,12 @@ method_test!(switch_3, r#"
         }
     }
     System.out.println(cnt);
-"#);
+"#
+);
 
-method_test!(block_1, r#"
+method_test!(
+    block_1,
+    r#"
     {
         int x = 0;
         x += 1;
@@ -585,9 +699,12 @@ method_test!(block_1, r#"
         x += 1;
         System.out.println(x);
     }
-"#);
+"#
+);
 
-method_test!(array_1, r#"
+method_test!(
+    array_1,
+    r#"
     int[] vars = new int[10];
     for (int i = 0; i < 10; i++) {
         System.out.print(vars[i]);
@@ -597,9 +714,12 @@ method_test!(array_1, r#"
     for (int i = 0; i < 6; i++) {
         System.out.print(array[i]);
     }
-"#);
+"#
+);
 
-method_test!(array_2, r#"
+method_test!(
+    array_2,
+    r#"
     int[][][][] a = new int[10][100][][];
     int[][] b = new int[][] { 
         { 0, 1, 2 },
@@ -607,9 +727,12 @@ method_test!(array_2, r#"
         { 5, 6, 8 }
      };
     int c[][], d[];
-"#);
+"#
+);
 
-classes_test!(obj1, r#"
+classes_test!(
+    obj1,
+    r#"
     class Point {
         int x;
         int y;
@@ -635,9 +758,12 @@ classes_test!(obj1, r#"
             System.out.printf("%d %d\n", p.getx(), p.gety());
         }
     }
-"#);
+"#
+);
 
-classes_test!(obj2, r#"
+classes_test!(
+    obj2,
+    r#"
     class Item {
         int a;
         Item(int _a) {
@@ -671,4 +797,5 @@ classes_test!(obj2, r#"
             System.out.printf("%d\n", p.c.a);
         }
     }
-"#);
+"#
+);
