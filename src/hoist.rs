@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::container::ContainerHelpers;
 use crate::ir::*;
 use crate::symbolmanager::{Symbol, SymbolManager};
 
@@ -38,7 +39,7 @@ fn statement(root: &Tree, state: &mut State) -> TreeContainer {
         Tree::Program(stmts) => {
             let mut res = TreeContainer::new();
             for s in stmts {
-                res.append(statement(s, state))
+                res.append(&mut statement(s, state))
             }
             res
         }
@@ -46,7 +47,7 @@ fn statement(root: &Tree, state: &mut State) -> TreeContainer {
         Tree::LetF(fundecl) => {
             let mut body = TreeContainer::new();
             for s in &fundecl.body {
-                body.append(statement(&s, state))
+                body.append(&mut statement(&s, state))
             }
             TreeContainer::make(Tree::LetF(FunDeclaration {
                 body,
@@ -56,7 +57,7 @@ fn statement(root: &Tree, state: &mut State) -> TreeContainer {
         Tree::LetC(classdecl) => {
             let mut methods = TreeContainer::new();
             for s in &classdecl.methods {
-                methods.append(statement(&s, state))
+                methods.append(&mut statement(&s, state))
             }
             TreeContainer::make(Tree::LetC(ClassDeclaration {
                 methods,
@@ -72,8 +73,8 @@ fn statement(root: &Tree, state: &mut State) -> TreeContainer {
             let (mut lhsv, l) = (TreeContainer::new(), args[0].clone());
             let mut nargs = vec![l, args[1].clone()];
             for arg in &args[2..] {
-                let (rhsv, r) = operand(arg, state);
-                lhsv.append(rhsv);
+                let (mut rhsv, r) = operand(arg, state);
+                lhsv.append(&mut rhsv);
                 nargs.push(r);
             }
             lhsv.push_back(Tree::LetP(PrimStatement {
@@ -110,7 +111,7 @@ fn statement(root: &Tree, state: &mut State) -> TreeContainer {
         Tree::Block(bstmt) => {
             let mut bbody = TreeContainer::new();
             for s in &bstmt.bbody {
-                bbody.append(statement(&s, state))
+                bbody.append(&mut statement(&s, state))
             }
             TreeContainer::make(Tree::Block(BlockStatement {
                 bbody,
@@ -123,7 +124,7 @@ fn statement(root: &Tree, state: &mut State) -> TreeContainer {
             for (ops, code) in &sstmt.cases {
                 let mut newcode = TreeContainer::new();
                 for s in code {
-                    newcode.append(statement(&s, state))
+                    newcode.append(&mut statement(&s, state))
                 }
                 cases.push((ops.clone(), newcode));
             }
@@ -154,16 +155,16 @@ fn statement(root: &Tree, state: &mut State) -> TreeContainer {
                 lstmt
                     .lbody
                     .iter()
-                    .for_each(|s| bbody.append(statement(&s, state)));
+                    .for_each(|s| bbody.append(&mut statement(&s, state)));
                 bbody = tail(bbody, Tree::Break(label));
                 lbody = TreeContainer::make(Tree::Block(BlockStatement { label, bbody }));
-                lbody.append(head);
+                lbody.append(&mut head);
             } else {
+                lbody.append(&mut head);
                 lstmt
                     .lbody
                     .iter()
-                    .for_each(|s| lbody.append(statement(&s, state)));
-                lbody = head + lbody;
+                    .for_each(|s| lbody.append(&mut statement(&s, state)));
             }
             lbody = tail(lbody, Tree::Continue(lstmt.label));
             res.push_back(Tree::Loop(LoopStatement {
@@ -184,10 +185,10 @@ fn statement(root: &Tree, state: &mut State) -> TreeContainer {
             let (mut nbtrue, mut nbfalse) = (TreeContainer::new(), TreeContainer::new());
             btrue
                 .iter()
-                .for_each(|s| nbtrue.append(statement(s, state)));
+                .for_each(|s| nbtrue.append(&mut statement(s, state)));
             bfalse
                 .iter()
-                .for_each(|s| nbfalse.append(statement(s, state)));
+                .for_each(|s| nbfalse.append(&mut statement(s, state)));
             head.push_back(Tree::If(IfStatement {
                 cond,
                 label: *label,
@@ -235,9 +236,9 @@ fn array_initializer(
         .collect::<Vec<_>>()
         .into_iter()
         .fold((TreeContainer::new(), Vec::new()), |acc, vec| {
-            let (v, op) = vec;
+            let (mut v, op) = vec;
             let (mut av, mut aops) = acc;
-            av.append(v);
+            av.append(&mut v);
             aops.push(op);
             (av, aops)
         });
@@ -259,8 +260,8 @@ fn operand(root: &Operand, state: &mut State) -> (TreeContainer, Operand) {
                 let mut lhsv = TreeContainer::new();
                 let mut nops = vec![ops[0].clone()];
                 for arg in &ops[1..] {
-                    let (rhsv, r) = operand(arg, state);
-                    lhsv.append(rhsv);
+                    let (mut rhsv, r) = operand(arg, state);
+                    lhsv.append(&mut rhsv);
                     nops.push(r);
                 }
                 (lhsv, Operand::A(ArrayExpression::Empty(Box::new(nops))))
@@ -276,19 +277,21 @@ fn operand(root: &Operand, state: &mut State) -> (TreeContainer, Operand) {
                 if args.len() == 2 =>
             {
                 let (lhsv, l) = operand(&args[0], state);
-                let (rhsv, r) = operand(&args[1], state);
+                let (mut rhsv, r) = operand(&args[1], state);
                 let op = Operand::T(ExprTree {
                     op: *op,
                     args: vec![l, r],
                 });
-                wrap_prim(lhsv + rhsv, op, state)
+                let mut res = lhsv;
+                res.append(&mut rhsv);
+                wrap_prim(res, op, state)
             }
             Set | PSet | SSet | MSet | DSet | ModSet | AndSet | OrSet | XorSet | ShrSet
             | UshrSet | ShlSet
                 if args.len() == 2 =>
             {
                 let (lhsv, l) = assignee(&args[0], state);
-                let (rhsv, r) = operand(&args[1], state);
+                let (mut rhsv, r) = operand(&args[1], state);
                 match l {
                     Operand::V(sym) => {
                         let exp = if *op == Set {
@@ -300,24 +303,28 @@ fn operand(root: &Operand, state: &mut State) -> (TreeContainer, Operand) {
                                 args,
                             }))
                         };
-                        let prim = TreeContainer::make(Tree::LetP(PrimStatement {
+                        let mut res = lhsv;
+                        res.append(&mut rhsv);
+                        res.push_back(Tree::LetP(PrimStatement {
                             name: Some(sym),
                             typ: Typ::Void,
                             exp,
                         }));
-                        (lhsv + rhsv + prim, Operand::V(sym))
+                        (res, Operand::V(sym))
                     }
                     _ => {
                         let op = Operand::T(ExprTree {
                             op: *op,
                             args: vec![l.clone(), r],
                         });
-                        let prim = TreeContainer::make(Tree::LetP(PrimStatement {
+                        let mut res = lhsv;
+                        res.append(&mut rhsv);
+                        res.push_back(Tree::LetP(PrimStatement {
                             name: None,
                             typ: Typ::Void,
                             exp: Some(op),
                         }));
-                        (lhsv + rhsv + prim, l)
+                        (res, l)
                     }
                 }
             }
@@ -348,8 +355,16 @@ fn operand(root: &Operand, state: &mut State) -> (TreeContainer, Operand) {
                             exp,
                         }));
                         match op {
-                            PreDec | PreInc => (lhsv + prims, Operand::V(sym)),
-                            PostDec | PostInc => (lhsv + prims, Operand::V(temp)),
+                            PreDec | PreInc => {
+                                let mut res = lhsv;
+                                res.append(&mut prims);
+                                (res, Operand::V(sym))
+                            }
+                            PostDec | PostInc => {
+                                let mut res = lhsv;
+                                res.append(&mut prims);
+                                (res, Operand::V(temp))
+                            }
                             _ => panic!(),
                         }
                     }
@@ -358,12 +373,13 @@ fn operand(root: &Operand, state: &mut State) -> (TreeContainer, Operand) {
                             op: *op,
                             args: vec![l.clone()],
                         });
-                        let prim = TreeContainer::make(Tree::LetP(PrimStatement {
+                        let mut res = lhsv;
+                        res.push_back(Tree::LetP(PrimStatement {
                             name: None,
                             typ: Typ::Void,
                             exp: Some(op),
                         }));
-                        (lhsv + prim, l)
+                        (res, l)
                     }
                 }
             }
@@ -377,13 +393,16 @@ fn operand(root: &Operand, state: &mut State) -> (TreeContainer, Operand) {
             }
             Ternary if args.len() == 3 => {
                 let (lhsv, l) = operand(&args[0], state);
-                let (rhsv, r) = operand(&args[1], state);
-                let (mhsv, m) = operand(&args[2], state);
+                let (mut rhsv, r) = operand(&args[1], state);
+                let (mut mhsv, m) = operand(&args[2], state);
                 let op = Operand::T(ExprTree {
                     op: *op,
                     args: vec![l, r, m],
                 });
-                wrap_prim(lhsv + rhsv + mhsv, op, state)
+                let mut res = lhsv;
+                res.append(&mut rhsv);
+                res.append(&mut mhsv);
+                wrap_prim(res, op, state)
                 // Hold off on ternary hoisting until we have
                 // Better type resolution....
                 // let res = state.sm.fresh("ternary");
@@ -418,8 +437,8 @@ fn operand(root: &Operand, state: &mut State) -> (TreeContainer, Operand) {
                 let mut lhsv = TreeContainer::new();
                 let mut nargs = vec![args[0].clone()];
                 for arg in &args[1..] {
-                    let (rhsv, r) = operand(arg, state);
-                    lhsv.append(rhsv);
+                    let (mut rhsv, r) = operand(arg, state);
+                    lhsv.append(&mut rhsv);
                     nargs.push(r);
                 }
                 let op = Operand::T(ExprTree {
@@ -434,8 +453,8 @@ fn operand(root: &Operand, state: &mut State) -> (TreeContainer, Operand) {
                 let (mut lhsv, l) = (TreeContainer::new(), args[0].clone());
                 let mut nargs = vec![l, args[1].clone()];
                 for arg in &args[2..] {
-                    let (rhsv, r) = operand(arg, state);
-                    lhsv.append(rhsv);
+                    let (mut rhsv, r) = operand(arg, state);
+                    lhsv.append(&mut rhsv);
                     nargs.push(r);
                 }
                 let op = Operand::T(ExprTree {

@@ -2,10 +2,10 @@ use crate::ir;
 pub fn link(base: ir::Tree, extention: ir::Tree) -> ir::Tree {
     if let (ir::Tree::Program(base_stmts), ir::Tree::Program(extention_stmts)) = (base, extention) {
         let (mut based, mut basec) = declaration_split(base_stmts);
-        let (extentiond, extentionc) = declaration_split(extention_stmts);
-        based.append(extentiond);
-        basec.append(extentionc);
-        based.append(basec);
+        let (mut extentiond, mut extentionc) = declaration_split(extention_stmts);
+        based.append(&mut extentiond);
+        basec.append(&mut extentionc);
+        based.append(&mut basec);
         ir::Tree::Program(based)
     } else {
         panic!("Linker expects two Tree::Programs as input")

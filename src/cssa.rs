@@ -1,3 +1,4 @@
+use crate::container::ContainerHelpers;
 use crate::dsu::Dsu;
 use crate::graph;
 use crate::graph::*;
@@ -131,12 +132,16 @@ pub fn transform(alloc: &mut Allocator, sm: &mut SymbolManager) {
                 pcopy_args.push(copy_args);
                 pred_pcopies.extend(pred_args);
             } else {
-                nodes[id].content.push_front(cur);
-                let content = std::mem::take(&mut nodes[id].content);
                 if pcopy_args.len() > 0 {
                     phis.push_back(pcopy(pcopy_args))
                 }
-                nodes[id].content = phis + content;
+                let mut content = std::mem::take(&mut nodes[id].content);
+                let mut res = phis;
+                // Because we popped a normal piece of the node's content
+                // Whilst trying to grab all the Phi nodes.
+                res.push_back(cur);
+                res.append(&mut content);
+                nodes[id].content = res;
                 break;
             }
         }
@@ -544,7 +549,7 @@ pub fn revert_graph(alloc: &mut Allocator, sm: &mut SymbolManager) {
                 ..
             }) = cur
             {
-                res.append(pcopy(args, sm));
+                res.append(&mut pcopy(args, sm));
             } else {
                 res.push_back(cur);
             }

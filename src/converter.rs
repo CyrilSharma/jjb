@@ -1,6 +1,7 @@
 // https://github.com/tree-sitter/tree-sitter-java/blob/master/grammar.js
 // We parse a subset of the above grammar.
 
+use crate::container::ContainerHelpers;
 use crate::directory::Directory;
 use crate::ir::*;
 use crate::parameters::Parameters;
@@ -237,7 +238,7 @@ fn statements(node: Node, state: &mut State) -> TreeContainer {
     let mut cur = node;
     let mut res = TreeContainer::new();
     loop {
-        res.append(statement(cur, state));
+        res.append(&mut statement(cur, state));
         if let Some(nxt) = cur.next_named_sibling() {
             cur = nxt;
             continue;
@@ -487,7 +488,7 @@ fn labeled_statement(node: Node, state: &mut State) -> TreeContainer {
             }));
         }
     } else {
-        ans.append(statement(content, state))
+        ans.append(&mut statement(content, state))
     };
     state.scope_out();
     state.label_stk.pop();
@@ -613,7 +614,7 @@ fn for_statement(node: Node, state: &mut State) -> TreeContainer {
     let mut res = TreeContainer::new();
     let fchild = state.tsret.get_field(&node, "init");
     if fchild.kind() == "local_variable_declaration" {
-        res.append(local_variable_declaration(fchild, state));
+        res.append(&mut local_variable_declaration(fchild, state));
     } else {
         let mut cursor = node.walk();
         for child in node.children_by_field_name("init", &mut cursor) {
