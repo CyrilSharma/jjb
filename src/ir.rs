@@ -1,5 +1,6 @@
-use crate::container::Container;
+use crate::container;
 use crate::symbolmanager::Symbol;
+use std::collections::LinkedList;
 use std::fmt;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -203,7 +204,8 @@ pub enum Operation {
  * Easy to unroll (high-level structures are kept).
  */
 
-pub type TreeContainer = Container<Tree>;
+pub type TreeContainer = LinkedList<Tree>;
+pub type TreeContainerIter = std::collections::linked_list::IntoIter<Tree>;
 
 #[derive(Clone)]
 pub enum Tree {

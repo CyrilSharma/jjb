@@ -1,7 +1,6 @@
 use fixedbitset::FixedBitSet;
 use std::collections::{HashMap, HashSet};
 
-use crate::container::ContainerIntoIter;
 use crate::ir::*;
 use crate::printer::str_print;
 use crate::symbolmanager::{Symbol, SymbolManager};
@@ -117,7 +116,7 @@ pub fn build(tree: TreeContainer) -> (Allocator, HashMap<Id, Id>) {
     (state.alloc, state.next_map)
 }
 
-fn build_graph(mut iter: ContainerIntoIter<Tree>, state: &mut State) -> (Id, Box<[Id]>) {
+fn build_graph(mut iter: TreeContainerIter, state: &mut State) -> (Id, Box<[Id]>) {
     let nid = state.alloc.alloc();
     let mut content = TreeContainer::new();
     let tails = Vec::new();
@@ -277,7 +276,7 @@ fn fold_graph(id: Id, allocator: &mut Allocator, next_map: &HashMap<Id, Id>) -> 
         }
     }
     if let Some(n) = next_map.get(&id) {
-        content.append(fold_graph(*n, allocator, next_map));
+        content.extend(fold_graph(*n, allocator, next_map));
     }
     content
 }

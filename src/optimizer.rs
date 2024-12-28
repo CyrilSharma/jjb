@@ -1,5 +1,5 @@
 use crate::container::*;
-use crate::ir::{Literal, Tree, TreeContainer, Typ};
+use crate::ir::{Literal, Tree, TreeContainer, TreeContainerIter, Typ};
 use crate::substitution::Substitution;
 use crate::symbolmanager::{Symbol, SymbolManager};
 use std::collections::HashMap;
@@ -23,7 +23,7 @@ struct OptimizeState<'l> {
     f_env: HashMap<Symbol, FunDef>,
     l_env: HashMap<Symbol, TreeContainer>,
     const_env: HashMap<Symbol, Literal>,
-    next: Option<ContainerIntoIter<Tree>>,
+    next: Option<TreeContainerIter>,
     inline: Option<InlineInfo>,
     sm: &'l mut SymbolManager,
 }
@@ -129,6 +129,7 @@ pub mod shrink {
     use super::census;
     use super::{FunDef, OptimizeState as State};
     use crate::ir::*;
+    use crate::optimizer::ContainerHelpers;
     use crate::symbolmanager::{Symbol, SymbolManager};
 
     pub fn shrink(root: Tree, sm: &mut SymbolManager) -> Box<Tree> {
@@ -199,7 +200,7 @@ pub mod shrink {
         while let Some(stmt) = cur {
             state.next = Some(iter.clone());
             let cdead = contdead(&stmt, state);
-            res.append(traverse(stmt, state));
+            res.extend(traverse(stmt, state));
             if cdead {
                 break;
             }
